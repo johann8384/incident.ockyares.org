@@ -45,16 +45,10 @@
                     </div>
                     
                     <div class="row">
-                        <div class="col-md-6">
+                        <div class="col-md-12">
                             <div class="mb-3">
                                 <label for="ic_name" class="form-label">Incident Commander *</label>
                                 <input type="text" class="form-control" id="ic_name" required>
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="mb-3">
-                                <label for="grid_size" class="form-label">Division Grid Size (meters)</label>
-                                <input type="number" class="form-control" id="grid_size" value="100" min="50" max="500">
                             </div>
                         </div>
                     </div>
@@ -91,7 +85,7 @@
                         <strong>Instructions:</strong> 
                         1. Enter coordinates above or click on the map to set incident location<br>
                         2. Use the drawing tools to outline the search area<br>
-                        3. The system will automatically create divisions based on your grid size
+                        3. The system will automatically calculate recommended divisions based on area size
                     </div>
                     
                     <div id="map" class="map-container"></div>
@@ -103,15 +97,36 @@
                 </div>
             </div>
             
-            <!-- Teams -->
+            <!-- Search Divisions -->
             <div class="card mb-4">
                 <div class="card-header">
-                    <h3>Search Teams</h3>
-                    <button type="button" class="btn btn-success btn-sm float-end" id="add-team">Add Team</button>
+                    <h3>Search Divisions</h3>
                 </div>
                 <div class="card-body">
-                    <div id="teams-container">
-                        <!-- Teams will be added here dynamically -->
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="division_count" class="form-label">Number of Search Divisions *</label>
+                                <input type="number" class="form-control" id="division_count" min="1" max="26" value="4" required>
+                                <div class="form-text">
+                                    <span id="division-recommendation">Recommended: 4 divisions based on default area</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">Search Area Information</label>
+                                <div class="form-control-plaintext">
+                                    <div id="area-size">Area: Not calculated</div>
+                                    <div id="division-size">Avg. division size: Not calculated</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="alert alert-warning">
+                        <strong>Note:</strong> Each division will be approximately 45,000 m² (4.5 hectares) based on the recommended calculation. 
+                        You can adjust the number of divisions as needed for your operational requirements.
                     </div>
                 </div>
             </div>
@@ -119,7 +134,7 @@
             <div class="text-center">
                 <button type="submit" class="btn btn-primary btn-lg" id="submit-btn">
                     <span class="spinner-border spinner-border-sm me-2" id="loading-spinner" style="display: none;"></span>
-                    Create Incident and Generate QR Codes
+                    Create Incident and Generate Divisions
                 </button>
             </div>
         </form>
@@ -134,6 +149,7 @@ let map;
 let incidentMarker;
 let searchAreaLayer;
 let searchAreaCoordinates = [];
+let searchAreaSizeM2 = 0;
 
 // Initialize map
 function initMap() {
@@ -163,14 +179,34 @@ function initMap() {
     });
 }
 
-// Toggle drawing mode
-function toggleDrawingMode() {
-    map.drawingMode = !map.drawingMode;
-    document.getElementById('drawing-btn').textContent = 
-        map.drawingMode ? 'Stop Drawing' : 'Draw Search Area';
+// Calculate area using Shoelace formula (approximate)
+function calculatePolygonAreaM2(coords) {
+    if (coords.length < 3) return 0;
+    
+    // Convert to meters using approximate conversion
+    // This is a rough approximation - for precise calculations, proper projection should be used
+    let area = 0;
+    const avgLat = coords.reduce((sum, coord) => sum + coord[1], 0) / coords.length;
+    const mPerDegreeLat = 111320; // meters per degree latitude
+    const mPerDegreeLng = 111320 * Math.cos(avgLat * Math.PI / 180); // meters per degree longitude at this latitude
+    
+    // Convert coordinates to meters
+    const coordsM = coords.map(coord => [
+        coord[0] * mPerDegreeLng,
+        coord[1] * mPerDegreeLat
+    ]);
+    
+    // Shoelace formula
+    for (let i = 0; i < coordsM.length; i++) {
+        const j = (i + 1) % coordsM.length;
+        area += coordsM[i][0] * coordsM[j][1];
+        area -= coordsM[j][0] * coordsM[i][1];
+    }
+    
+    return Math.abs(area) / 2;
 }
 
-// Update search area display
+// Update search area display and calculate divisions
 function updateSearchArea() {
     if (searchAreaLayer) {
         map.removeLayer(searchAreaLayer);
@@ -192,54 +228,51 @@ function updateSearchArea() {
             fillOpacity: 0.3
         }).addTo(map);
         
+        // Calculate area
+        searchAreaSizeM2 = calculatePolygonAreaM2(coords);
+        
+        // Calculate recommended divisions (45,000 m² per division)
+        const recommendedDivisions = Math.max(1, Math.round(searchAreaSizeM2 / 45000));
+        
+        // Update UI
         document.getElementById('area-status').textContent = 
             `Search area defined with ${searchAreaCoordinates.length} points`;
+        
+        document.getElementById('area-size').textContent = 
+            `Area: ${(searchAreaSizeM2 / 10000).toFixed(2)} hectares (${searchAreaSizeM2.toLocaleString()} m²)`;
+        
+        document.getElementById('division-recommendation').textContent = 
+            `Recommended: ${recommendedDivisions} divisions based on area size`;
+        
+        document.getElementById('division_count').value = recommendedDivisions;
+        
+        updateDivisionInfo();
+    }
+}
+
+// Update division size information
+function updateDivisionInfo() {
+    const divisionCount = parseInt(document.getElementById('division_count').value) || 1;
+    if (searchAreaSizeM2 > 0) {
+        const avgDivisionSize = searchAreaSizeM2 / divisionCount;
+        document.getElementById('division-size').textContent = 
+            `Avg. division size: ${(avgDivisionSize / 10000).toFixed(2)} hectares (${avgDivisionSize.toLocaleString()} m²)`;
     }
 }
 
 // Clear search area
 function clearSearchArea() {
     searchAreaCoordinates = [];
+    searchAreaSizeM2 = 0;
     if (searchAreaLayer) {
         map.removeLayer(searchAreaLayer);
         searchAreaLayer = null;
     }
     document.getElementById('area-status').textContent = 'No search area defined';
-}
-
-// Team management
-let teamCounter = 0;
-
-function addTeam() {
-    teamCounter++;
-    const teamHtml = `
-        <div class="team-card" id="team-${teamCounter}">
-            <div class="row">
-                <div class="col-md-4">
-                    <label class="form-label">Team Name</label>
-                    <input type="text" class="form-control team-name" placeholder="Team Alpha">
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">Team Leader</label>
-                    <input type="text" class="form-control team-leader" placeholder="Captain Smith">
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label">Team ID</label>
-                    <input type="text" class="form-control team-id" value="team${teamCounter}" readonly>
-                </div>
-                <div class="col-md-1">
-                    <label class="form-label">&nbsp;</label>
-                    <button type="button" class="btn btn-danger btn-sm d-block" onclick="removeTeam(${teamCounter})">Remove</button>
-                </div>
-            </div>
-        </div>
-    `;
-    
-    document.getElementById('teams-container').insertAdjacentHTML('beforeend', teamHtml);
-}
-
-function removeTeam(teamId) {
-    document.getElementById(`team-${teamId}`).remove();
+    document.getElementById('area-size').textContent = 'Area: Not calculated';
+    document.getElementById('division-size').textContent = 'Avg. division size: Not calculated';
+    document.getElementById('division-recommendation').textContent = 'Recommended: 4 divisions based on default area';
+    document.getElementById('division_count').value = 4;
 }
 
 // Form submission
@@ -261,25 +294,18 @@ function submitForm(e) {
             description: document.getElementById('description').value
         },
         search_area_coordinates: searchAreaCoordinates,
-        grid_size: parseInt(document.getElementById('grid_size').value),
-        teams: []
+        division_count: parseInt(document.getElementById('division_count').value),
+        teams: [] // Empty teams array - divisions will be created without pre-assigned teams
     };
-    
-    // Collect team data
-    document.querySelectorAll('.team-card').forEach(card => {
-        const teamData = {
-            team_name: card.querySelector('.team-name').value,
-            team_leader: card.querySelector('.team-leader').value,
-            team_id: card.querySelector('.team-id').value
-        };
-        if (teamData.team_name && teamData.team_leader) {
-            formData.teams.push(teamData);
-        }
-    });
     
     // Validate
     if (searchAreaCoordinates.length < 3) {
         showError('Please define a search area with at least 3 points');
+        return;
+    }
+    
+    if (!formData.division_count || formData.division_count < 1) {
+        showError('Please specify at least 1 search division');
         return;
     }
     
@@ -330,31 +356,11 @@ function showError(message) {
 document.addEventListener('DOMContentLoaded', function() {
     initMap();
     
-    document.getElementById('add-team').addEventListener('click', addTeam);
     document.getElementById('clear-area').addEventListener('click', clearSearchArea);
     document.getElementById('incident-form').addEventListener('submit', submitForm);
     
-    // Add some default teams
-    addTeam();
-    addTeam();
-    addTeam();
-    
-    // Set default team names
-    setTimeout(() => {
-        const teamCards = document.querySelectorAll('.team-card');
-        if (teamCards[0]) {
-            teamCards[0].querySelector('.team-name').value = 'Team Alpha';
-            teamCards[0].querySelector('.team-leader').value = 'Captain Smith';
-        }
-        if (teamCards[1]) {
-            teamCards[1].querySelector('.team-name').value = 'Team Bravo';
-            teamCards[1].querySelector('.team-leader').value = 'Captain Jones';
-        }
-        if (teamCards[2]) {
-            teamCards[2].querySelector('.team-name').value = 'Team Charlie';
-            teamCards[2].querySelector('.team-leader').value = 'Captain Brown';
-        }
-    }, 100);
+    // Listen for division count changes
+    document.getElementById('division_count').addEventListener('input', updateDivisionInfo);
 });
 
 // Add polygon drawing functionality
