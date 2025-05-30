@@ -61,7 +61,10 @@
                                 </div>
                                 <div class="col-md-6">
                                     <p><strong>Start Time:</strong> <span id="incident-start"></span></p>
-                                    <p><strong>Location:</strong> <span id="incident-location"></span></p>
+                                    <p><strong>Location:</strong> 
+                                        <span id="incident-location"></span>
+                                        <br><small class="text-muted" id="incident-coordinates"></small>
+                                    </p>
                                     <p><strong>Description:</strong> <span id="incident-description"></span></p>
                                 </div>
                             </div>
@@ -159,6 +162,22 @@ function getUnitStatusClass(status) {
         case 'returned': return 'badge-success';
         default: return 'badge-secondary';
     }
+}
+
+function formatLocation(incident) {
+    // Display address if available, otherwise show coordinates
+    let locationText = '';
+    let coordinatesText = '';
+    
+    if (incident.address && incident.address.trim() !== '') {
+        locationText = incident.address;
+        coordinatesText = `Coordinates: ${incident.latitude.toFixed(6)}, ${incident.longitude.toFixed(6)}`;
+    } else {
+        locationText = `${incident.latitude.toFixed(6)}, ${incident.longitude.toFixed(6)}`;
+        coordinatesText = 'No address available';
+    }
+    
+    return { locationText, coordinatesText };
 }
 
 function toggleStageEdit() {
@@ -317,8 +336,10 @@ function showIncidentData(data) {
     const startTime = new Date(incident.start_time);
     document.getElementById('incident-start').textContent = startTime.toLocaleString();
     
-    // Display location
-    document.getElementById('incident-location').textContent = `${incident.latitude.toFixed(6)}, ${incident.longitude.toFixed(6)}`;
+    // Display location with address if available
+    const locationInfo = formatLocation(incident);
+    document.getElementById('incident-location').textContent = locationInfo.locationText;
+    document.getElementById('incident-coordinates').textContent = locationInfo.coordinatesText;
     
     // Display description
     document.getElementById('incident-description').textContent = incident.description || 'No description provided';
@@ -351,7 +372,7 @@ function updateMap(incident, divisions, units) {
         })
     })
         .addTo(map)
-        .bindPopup(`<strong>${incident.incident_name}</strong><br/>Incident Command Post`)
+        .bindPopup(`<strong>${incident.incident_name}</strong><br/>Incident Command Post<br/>${incident.address || 'Location: ' + incident.latitude.toFixed(6) + ', ' + incident.longitude.toFixed(6)}`)
         .openPopup();
     
     // Add search areas if available
@@ -561,6 +582,11 @@ function refreshIncidentData() {
                     document.getElementById('incident-stage-display').textContent = currentStage;
                     document.getElementById('incident-stage-display').className = `badge ${getStageClass(currentStage)}`;
                 }
+                
+                // Update location display if address changed
+                const locationInfo = formatLocation(data.incident);
+                document.getElementById('incident-location').textContent = locationInfo.locationText;
+                document.getElementById('incident-coordinates').textContent = locationInfo.coordinatesText;
                 
                 // Update unit markers without reinitializing the map
                 if (map) {
