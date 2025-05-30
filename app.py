@@ -137,6 +137,43 @@ class IncidentManager:
             cursor.close()
             self.close_db()
 
+    def get_incident_unit_checkins(self, incident_id):
+        """Get all unit check-ins for an incident"""
+        conn = self.connect_db()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        
+        try:
+            cursor.execute("""
+                SELECT id, unit_id, officer_name, personnel_count, equipment_status,
+                       ST_X(location_point) as longitude, ST_Y(location_point) as latitude,
+                       photo_path, checkin_time, created_at, updated_at
+                FROM unit_checkins 
+                WHERE incident_id = %s
+                ORDER BY checkin_time DESC
+            """, (incident_id,))
+            
+            checkins = []
+            for checkin in cursor.fetchall():
+                checkin_dict = dict(checkin)
+                # Convert datetime objects to strings for JSON serialization
+                if checkin_dict['checkin_time']:
+                    checkin_dict['checkin_time'] = checkin_dict['checkin_time'].isoformat()
+                if checkin_dict['created_at']:
+                    checkin_dict['created_at'] = checkin_dict['created_at'].isoformat()
+                if checkin_dict['updated_at']:
+                    checkin_dict['updated_at'] = checkin_dict['updated_at'].isoformat()
+                checkins.append(checkin_dict)
+            
+            app.logger.info(f"Retrieved {len(checkins)} unit check-ins for incident {incident_id}")
+            return checkins
+            
+        except Exception as e:
+            app.logger.error(f"Failed to get unit check-ins: {e}")
+            raise e
+        finally:
+            cursor.close()
+            self.close_db()
+
     def get_available_assignment(self, incident_id):
         """Get an available assignment for a unit"""
         conn = self.connect_db()
@@ -204,7 +241,7 @@ class IncidentManager:
                 SELECT incident_id, incident_name, incident_type, ic_name,
                        start_time, end_time, status, description,
                        ST_X(center_point) as longitude, ST_Y(center_point) as latitude,
-                       created_at
+                       created_at, updated_at
                 FROM incidents 
                 WHERE incident_id = %s
             """, (incident_id,))
@@ -220,6 +257,8 @@ class IncidentManager:
                 incident['end_time'] = incident['end_time'].isoformat()
             if incident['created_at']:
                 incident['created_at'] = incident['created_at'].isoformat()
+            if incident['updated_at']:
+                incident['updated_at'] = incident['updated_at'].isoformat()
             
             # Get search areas
             cursor.execute("""
@@ -257,7 +296,7 @@ class IncidentManager:
             cursor.execute("""
                 SELECT id, division_id, division_name, assigned_team, team_leader,
                        priority, search_type, estimated_duration, status,
-                       created_at,
+                       created_at, updated_at,
                        ST_AsGeoJSON(geom) as geometry
                 FROM search_divisions 
                 WHERE incident_id = %s
@@ -271,6 +310,8 @@ class IncidentManager:
                     div_dict['geometry'] = json.loads(div_dict['geometry'])
                 if div_dict['created_at']:
                     div_dict['created_at'] = div_dict['created_at'].isoformat()
+                if div_dict['updated_at']:
+                    div_dict['updated_at'] = div_dict['updated_at'].isoformat()
                 divisions.append(div_dict)
             
             app.logger.info(f"Retrieved {len(divisions)} divisions for incident {incident_id}")
@@ -449,8 +490,8 @@ class IncidentManager:
             cursor.close()
             self.close_db()
     
-    def create_divisions(self, incident_id, search_area_coords, grid_size=100, teams=[]):
-        """Create search divisions"""
+    def create_divisions(self, incident_id, search_area_coords, division_count=4, teams=[]):
+        """Create search divisions based on count rather than grid size"""
         conn = self.connect_db()
         cursor = conn.cursor()
         
@@ -460,21 +501,27 @@ class IncidentManager:
             bounds = polygon.bounds
             
             divisions = []
-            division_counter = 0
+            division_letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
             
-            # Create grid divisions
+            # Calculate grid dimensions to get approximately the requested number of divisions
+            import math
+            total_divisions = min(division_count, 26)  # Max 26 divisions (A-Z)
+            grid_ratio = math.sqrt(total_divisions)
+            
             min_x, min_y, max_x, max_y = bounds
-            
-            x_steps = max(1, int((max_x - min_x) * 111000 / grid_size))  # Convert to meters approx
-            y_steps = max(1, int((max_y - min_y) * 111000 / grid_size))
+            x_steps = max(1, round(grid_ratio))
+            y_steps = max(1, math.ceil(total_divisions / x_steps))
             
             x_step_size = (max_x - min_x) / x_steps
             y_step_size = (max_y - min_y) / y_steps
             
-            division_letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+            division_counter = 0
             
             for i in range(x_steps):
                 for j in range(y_steps):
+                    if division_counter >= total_divisions:
+                        break
+                    
                     # Create grid cell
                     x1 = min_x + i * x_step_size
                     y1 = min_y + j * y_step_size
@@ -489,15 +536,8 @@ class IncidentManager:
                         clipped = polygon.intersection(cell)
                         
                         if clipped.area > 0:
-                            division_name = f"Division {division_letters[division_counter % 26]}"
-                            division_id = f"DIV-{division_letters[division_counter % 26]}"
-                            
-                            # Assign team if available
-                            assigned_team = None
-                            team_leader = None
-                            if division_counter < len(teams):
-                                assigned_team = teams[division_counter]['team_name']
-                                team_leader = teams[division_counter]['team_leader']
+                            division_name = f"Division {division_letters[division_counter]}"
+                            division_id = f"DIV-{division_letters[division_counter]}"
                             
                             # Convert back to WKT
                             if hasattr(clipped, 'exterior'):
@@ -517,12 +557,12 @@ class IncidentManager:
                                     incident_id,
                                     division_id,
                                     division_name,
-                                    assigned_team,
-                                    team_leader,
+                                    None,  # No pre-assigned teams
+                                    None,  # No pre-assigned team leaders
                                     1,
                                     'primary',
                                     '2 hours',
-                                    'assigned' if assigned_team else 'unassigned',
+                                    'unassigned',
                                     polygon_wkt
                                 ))
                                 
@@ -531,8 +571,8 @@ class IncidentManager:
                                     'id': div_id,
                                     'division_id': division_id,
                                     'division_name': division_name,
-                                    'assigned_team': assigned_team,
-                                    'team_leader': team_leader
+                                    'assigned_team': None,
+                                    'team_leader': None
                                 })
                                 
                                 division_counter += 1
@@ -705,15 +745,15 @@ def create_incident():
             data['search_area_coordinates']
         )
         
-        # Create divisions
+        # Create divisions based on division count
         divisions = incident_mgr.create_divisions(
             incident_id,
             data['search_area_coordinates'],
-            data.get('grid_size', 100),
+            data.get('division_count', 4),
             data.get('teams', [])
         )
         
-        # Generate QR codes
+        # Generate QR codes (empty for now since no pre-assigned teams)
         qr_codes = incident_mgr.generate_qr_codes(
             incident_id,
             data.get('teams', [])
@@ -751,13 +791,17 @@ def get_incident_data(incident_id):
         # Get divisions
         divisions = incident_mgr.get_incident_divisions(incident_id)
         
-        # Get QR codes
+        # Get unit check-ins
+        unit_checkins = incident_mgr.get_incident_unit_checkins(incident_id)
+        
+        # Get QR codes (for any assigned teams)
         qr_codes = incident_mgr.get_incident_qr_codes(incident_id)
         
         return jsonify({
             'success': True,
             'incident': incident,
             'divisions': divisions,
+            'unit_checkins': unit_checkins,
             'qr_codes': qr_codes
         })
         
