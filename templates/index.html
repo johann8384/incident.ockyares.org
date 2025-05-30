@@ -5,7 +5,7 @@
     <div class="col-md-12">
         <h1>Create New Incident</h1>
         
-        <div class="alert alert-success" id="success-alert">
+        <div class="alert alert-success" id="success-alert" style="display: none;">
             <strong>Success!</strong> Incident created successfully.
             <a href="#" id="view-incident-link">View Incident Details</a>
         </div>
@@ -83,16 +83,23 @@
                     
                     <div class="alert alert-info">
                         <strong>Instructions:</strong> 
-                        1. Enter coordinates above or click on the map to set incident location<br>
-                        2. Use the drawing tools to outline the search area<br>
-                        3. The system will automatically calculate recommended divisions based on area size
+                        1. Enter coordinates above or click "Set Incident Location" and click on the map<br>
+                        2. Click "Draw Search Area" to start drawing, then click points to create the search polygon<br>
+                        3. Click "Finish Drawing" when you have defined your search area<br>
+                        4. The system will automatically calculate recommended divisions based on area size
+                    </div>
+                    
+                    <div class="mb-3">
+                        <button type="button" class="btn btn-outline-primary" id="location-mode-btn">Set Incident Location</button>
+                        <button type="button" class="btn btn-outline-success" id="drawing-btn">Draw Search Area</button>
+                        <button type="button" class="btn btn-outline-danger" id="clear-area">Clear Search Area</button>
+                        <span class="text-muted ms-3" id="mode-status">Click "Set Incident Location" to place incident marker</span>
                     </div>
                     
                     <div id="map" class="map-container"></div>
                     
                     <div class="mt-3">
-                        <button type="button" class="btn btn-outline-primary" id="clear-area">Clear Search Area</button>
-                        <span class="text-muted ms-3" id="area-status">No search area defined</span>
+                        <span class="text-muted" id="area-status">No search area defined</span>
                     </div>
                 </div>
             </div>
@@ -150,6 +157,7 @@ let incidentMarker;
 let searchAreaLayer;
 let searchAreaCoordinates = [];
 let searchAreaSizeM2 = 0;
+let mapMode = 'none'; // 'location', 'drawing', or 'none'
 
 // Initialize map
 function initMap() {
@@ -159,24 +167,106 @@ function initMap() {
         attribution: '© OpenStreetMap contributors'
     }).addTo(map);
     
-    // Click handler for incident location
+    // Single click handler that routes to the appropriate function based on mode
     map.on('click', function(e) {
-        if (incidentMarker) {
-            map.removeLayer(incidentMarker);
+        if (mapMode === 'location') {
+            setIncidentLocation(e);
+        } else if (mapMode === 'drawing') {
+            addPolygonPoint(e);
         }
-        
-        incidentMarker = L.marker([e.latlng.lat, e.latlng.lng]).addTo(map);
-        document.getElementById('latitude').value = e.latlng.lat.toFixed(6);
-        document.getElementById('longitude').value = e.latlng.lng.toFixed(6);
     });
+}
+
+// Set incident location
+function setIncidentLocation(e) {
+    if (incidentMarker) {
+        map.removeLayer(incidentMarker);
+    }
     
-    // Drawing control for search area
-    map.on('click', function(e) {
-        if (map.drawingMode) {
-            searchAreaCoordinates.push([e.latlng.lng, e.latlng.lat]);
-            updateSearchArea();
+    incidentMarker = L.marker([e.latlng.lat, e.latlng.lng]).addTo(map);
+    document.getElementById('latitude').value = e.latlng.lat.toFixed(6);
+    document.getElementById('longitude').value = e.latlng.lng.toFixed(6);
+    
+    // Exit location mode after setting the marker
+    exitLocationMode();
+}
+
+// Add point to polygon
+function addPolygonPoint(e) {
+    searchAreaCoordinates.push([e.latlng.lng, e.latlng.lat]);
+    updateSearchArea();
+    updateModeStatus();
+}
+
+// Update mode status display
+function updateModeStatus() {
+    const modeStatus = document.getElementById('mode-status');
+    
+    switch(mapMode) {
+        case 'location':
+            modeStatus.textContent = 'Click on the map to set incident location';
+            modeStatus.className = 'text-primary ms-3';
+            break;
+        case 'drawing':
+            modeStatus.textContent = `Drawing polygon - ${searchAreaCoordinates.length} points added. Click "Finish Drawing" when complete.`;
+            modeStatus.className = 'text-success ms-3';
+            break;
+        default:
+            modeStatus.textContent = 'Click "Set Incident Location" to place incident marker or "Draw Search Area" to define search polygon';
+            modeStatus.className = 'text-muted ms-3';
+    }
+}
+
+// Enter location mode
+function enterLocationMode() {
+    mapMode = 'location';
+    document.getElementById('location-mode-btn').textContent = 'Cancel Location';
+    document.getElementById('location-mode-btn').className = 'btn btn-warning';
+    document.getElementById('drawing-btn').disabled = true;
+    updateModeStatus();
+}
+
+// Exit location mode
+function exitLocationMode() {
+    mapMode = 'none';
+    document.getElementById('location-mode-btn').textContent = 'Set Incident Location';
+    document.getElementById('location-mode-btn').className = 'btn btn-outline-primary';
+    document.getElementById('drawing-btn').disabled = false;
+    updateModeStatus();
+}
+
+// Enter drawing mode
+function enterDrawingMode() {
+    mapMode = 'drawing';
+    searchAreaCoordinates = []; // Reset coordinates when starting new drawing
+    if (searchAreaLayer) {
+        map.removeLayer(searchAreaLayer);
+        searchAreaLayer = null;
+    }
+    document.getElementById('drawing-btn').textContent = 'Finish Drawing';
+    document.getElementById('drawing-btn').className = 'btn btn-success';
+    document.getElementById('location-mode-btn').disabled = true;
+    updateModeStatus();
+}
+
+// Exit drawing mode
+function exitDrawingMode() {
+    mapMode = 'none';
+    document.getElementById('drawing-btn').textContent = 'Draw Search Area';
+    document.getElementById('drawing-btn').className = 'btn btn-outline-success';
+    document.getElementById('location-mode-btn').disabled = false;
+    
+    if (searchAreaCoordinates.length >= 3) {
+        updateSearchArea();
+    } else if (searchAreaCoordinates.length > 0) {
+        // Clear incomplete drawing
+        searchAreaCoordinates = [];
+        if (searchAreaLayer) {
+            map.removeLayer(searchAreaLayer);
+            searchAreaLayer = null;
         }
-    });
+    }
+    updateModeStatus();
 }
 
 // Calculate area using Shoelace formula (approximate)
@@ -184,7 +274,6 @@ function calculatePolygonAreaM2(coords) {
     if (coords.length < 3) return 0;
     
     // Convert to meters using approximate conversion
-    // This is a rough approximation - for precise calculations, proper projection should be used
     let area = 0;
     const avgLat = coords.reduce((sum, coord) => sum + coord[1], 0) / coords.length;
     const mPerDegreeLat = 111320; // meters per degree latitude
@@ -213,40 +302,66 @@ function updateSearchArea() {
     }
     
     if (searchAreaCoordinates.length >= 3) {
-        // Close the polygon
+        // Create a copy for display (don't modify the original)
         let coords = [...searchAreaCoordinates];
-        if (coords[0] !== coords[coords.length - 1]) {
-            coords.push(coords[0]);
+        
+        // Only close the polygon for display if we're not actively drawing
+        if (mapMode !== 'drawing') {
+            if (coords[0][0] !== coords[coords.length - 1][0] || coords[0][1] !== coords[coords.length - 1][1]) {
+                coords.push(coords[0]);
+            }
         }
         
         // Convert to leaflet format [lat, lng]
         let leafletCoords = coords.map(coord => [coord[1], coord[0]]);
         
-        searchAreaLayer = L.polygon(leafletCoords, {
-            color: 'red',
-            fillColor: '#f03',
-            fillOpacity: 0.3
+        if (mapMode === 'drawing') {
+            // Show as polyline while drawing
+            searchAreaLayer = L.polyline(leafletCoords, {
+                color: 'blue',
+                weight: 3,
+                dashArray: '5, 5'
+            }).addTo(map);
+        } else {
+            // Show as completed polygon
+            searchAreaLayer = L.polygon(leafletCoords, {
+                color: 'red',
+                fillColor: '#f03',
+                fillOpacity: 0.3
+            }).addTo(map);
+            
+            // Calculate area only for completed polygons
+            searchAreaSizeM2 = calculatePolygonAreaM2(coords);
+            
+            // Calculate recommended divisions (45,000 m² per division)
+            const recommendedDivisions = Math.max(1, Math.round(searchAreaSizeM2 / 45000));
+            
+            // Update UI
+            document.getElementById('area-size').textContent = 
+                `Area: ${(searchAreaSizeM2 / 10000).toFixed(2)} hectares (${searchAreaSizeM2.toLocaleString()} m²)`;
+            
+            document.getElementById('division-recommendation').textContent = 
+                `Recommended: ${recommendedDivisions} divisions based on area size`;
+            
+            document.getElementById('division_count').value = recommendedDivisions;
+            
+            updateDivisionInfo();
+        }
+        
+        // Update status
+        document.getElementById('area-status').textContent = 
+            `Search area: ${searchAreaCoordinates.length} points ${mapMode === 'drawing' ? '(drawing in progress)' : 'defined'}`;
+    } else if (searchAreaCoordinates.length > 0) {
+        // Show partial drawing
+        let leafletCoords = searchAreaCoordinates.map(coord => [coord[1], coord[0]]);
+        searchAreaLayer = L.polyline(leafletCoords, {
+            color: 'blue',
+            weight: 3,
+            dashArray: '5, 5'
         }).addTo(map);
         
-        // Calculate area
-        searchAreaSizeM2 = calculatePolygonAreaM2(coords);
-        
-        // Calculate recommended divisions (45,000 m² per division)
-        const recommendedDivisions = Math.max(1, Math.round(searchAreaSizeM2 / 45000));
-        
-        // Update UI
         document.getElementById('area-status').textContent = 
-            `Search area defined with ${searchAreaCoordinates.length} points`;
-        
-        document.getElementById('area-size').textContent = 
-            `Area: ${(searchAreaSizeM2 / 10000).toFixed(2)} hectares (${searchAreaSizeM2.toLocaleString()} m²)`;
-        
-        document.getElementById('division-recommendation').textContent = 
-            `Recommended: ${recommendedDivisions} divisions based on area size`;
-        
-        document.getElementById('division_count').value = recommendedDivisions;
-        
-        updateDivisionInfo();
+            `Search area: ${searchAreaCoordinates.length} points (need at least 3 points)`;
     }
 }
 
@@ -268,6 +383,12 @@ function clearSearchArea() {
         map.removeLayer(searchAreaLayer);
         searchAreaLayer = null;
     }
+    
+    // Exit drawing mode if active
+    if (mapMode === 'drawing') {
+        exitDrawingMode();
+    }
+    
     document.getElementById('area-status').textContent = 'No search area defined';
     document.getElementById('area-size').textContent = 'Area: Not calculated';
     document.getElementById('division-size').textContent = 'Avg. division size: Not calculated';
@@ -278,6 +399,14 @@ function clearSearchArea() {
 // Form submission
 function submitForm(e) {
     e.preventDefault();
+    
+    // Make sure we're not in any special mode
+    if (mapMode === 'drawing') {
+        exitDrawingMode();
+    }
+    if (mapMode === 'location') {
+        exitLocationMode();
+    }
     
     // Show loading state
     document.getElementById('loading-spinner').style.display = 'inline-block';
@@ -356,45 +485,31 @@ function showError(message) {
 document.addEventListener('DOMContentLoaded', function() {
     initMap();
     
+    // Mode toggle buttons
+    document.getElementById('location-mode-btn').addEventListener('click', function() {
+        if (mapMode === 'location') {
+            exitLocationMode();
+        } else {
+            enterLocationMode();
+        }
+    });
+    
+    document.getElementById('drawing-btn').addEventListener('click', function() {
+        if (mapMode === 'drawing') {
+            exitDrawingMode();
+        } else {
+            enterDrawingMode();
+        }
+    });
+    
     document.getElementById('clear-area').addEventListener('click', clearSearchArea);
     document.getElementById('incident-form').addEventListener('submit', submitForm);
     
     // Listen for division count changes
     document.getElementById('division_count').addEventListener('input', updateDivisionInfo);
-});
-
-// Add polygon drawing functionality
-document.addEventListener('DOMContentLoaded', function() {
-    // Add drawing button to map
-    const drawingBtn = document.createElement('button');
-    drawingBtn.id = 'drawing-btn';
-    drawingBtn.className = 'btn btn-outline-primary btn-sm';
-    drawingBtn.textContent = 'Draw Search Area';
-    drawingBtn.style.position = 'absolute';
-    drawingBtn.style.top = '10px';
-    drawingBtn.style.right = '10px';
-    drawingBtn.style.zIndex = '1000';
     
-    document.getElementById('map').appendChild(drawingBtn);
-    
-    drawingBtn.addEventListener('click', function() {
-        if (!map.drawingMode) {
-            // Start drawing
-            map.drawingMode = true;
-            this.textContent = 'Finish Drawing';
-            this.className = 'btn btn-success btn-sm';
-            searchAreaCoordinates = []; // Reset coordinates
-        } else {
-            // Finish drawing
-            map.drawingMode = false;
-            this.textContent = 'Draw Search Area';
-            this.className = 'btn btn-outline-primary btn-sm';
-            
-            if (searchAreaCoordinates.length >= 3) {
-                updateSearchArea();
-            }
-        }
-    });
+    // Initialize mode status
+    updateModeStatus();
 });
 </script>
 {% endblock %}
