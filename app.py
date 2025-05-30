@@ -68,6 +68,36 @@ class IncidentManager:
             app.logger.error(f"Database health check failed: {e}")
             return False
 
+    def update_incident_stage(self, incident_id, new_stage):
+        """Update incident stage"""
+        conn = self.connect_db()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                UPDATE incidents 
+                SET incident_stage = %s, updated_at = NOW()
+                WHERE incident_id = %s
+                RETURNING incident_stage
+            """, (new_stage, incident_id))
+            
+            result = cursor.fetchone()
+            if result:
+                conn.commit()
+                app.logger.info(f"Updated incident {incident_id} stage to {new_stage}")
+                return True
+            else:
+                app.logger.warning(f"Incident {incident_id} not found for stage update")
+                return False
+                
+        except Exception as e:
+            conn.rollback()
+            app.logger.error(f"Failed to update incident stage: {e}")
+            raise e
+        finally:
+            cursor.close()
+            self.close_db()
+
     def get_active_incidents(self):
         """Get list of active incidents for dropdown"""
         conn = self.connect_db()
@@ -186,7 +216,15 @@ class IncidentManager:
                        estimated_duration, ST_AsGeoJSON(geom) as geometry
                 FROM search_divisions 
                 WHERE incident_id = %s AND status = 'unassigned'
-                ORDER BY priority ASC, division_id ASC
+                ORDER BY 
+                    CASE priority 
+                        WHEN 'Urgent' THEN 1
+                        WHEN 'High' THEN 2 
+                        WHEN 'Medium' THEN 3
+                        WHEN 'Low' THEN 4
+                        ELSE 5
+                    END ASC,
+                    division_id ASC
                 LIMIT 1
             """, (incident_id,))
             
@@ -239,7 +277,7 @@ class IncidentManager:
             # Get basic incident information
             cursor.execute("""
                 SELECT incident_id, incident_name, incident_type, ic_name,
-                       start_time, end_time, status, description,
+                       start_time, end_time, status, incident_stage, description,
                        ST_X(center_point) as longitude, ST_Y(center_point) as latitude,
                        created_at, updated_at
                 FROM incidents 
@@ -266,7 +304,14 @@ class IncidentManager:
                        ST_AsGeoJSON(geom) as geometry
                 FROM search_areas 
                 WHERE incident_id = %s
-                ORDER BY priority
+                ORDER BY 
+                    CASE priority 
+                        WHEN 'Urgent' THEN 1
+                        WHEN 'High' THEN 2 
+                        WHEN 'Medium' THEN 3
+                        WHEN 'Low' THEN 4
+                        ELSE 5
+                    END ASC
             """, (incident_id,))
             
             search_areas = []
@@ -422,8 +467,8 @@ class IncidentManager:
             cursor.execute("""
                 INSERT INTO incidents (
                     incident_id, incident_name, incident_type, ic_name, 
-                    start_time, status, center_point, description
-                ) VALUES (%s, %s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s)
+                    start_time, status, incident_stage, center_point, description
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s)
                 RETURNING incident_id
             """, (
                 incident_id,
@@ -432,6 +477,7 @@ class IncidentManager:
                 incident_data['ic_name'],
                 datetime.now(),
                 'active',
+                'New',  # Default stage
                 float(incident_data['longitude']),
                 float(incident_data['latitude']),
                 incident_data.get('description', '')
@@ -473,7 +519,7 @@ class IncidentManager:
                     incident_id,
                     'Primary Search Zone',
                     'hot_zone',
-                    1,
+                    'High',  # Default to High priority for search areas
                     polygon_wkt
                 ))
                 
@@ -559,7 +605,7 @@ class IncidentManager:
                                     division_name,
                                     None,  # No pre-assigned teams
                                     None,  # No pre-assigned team leaders
-                                    1,
+                                    'Medium',  # Default priority
                                     'primary',
                                     '2 hours',
                                     'unassigned',
@@ -674,6 +720,27 @@ def get_incidents():
         return jsonify({'success': True, 'incidents': incidents})
     except Exception as e:
         app.logger.error(f"Error getting incidents: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/incident/<incident_id>/stage', methods=['PUT'])
+def update_incident_stage(incident_id):
+    """Update incident stage"""
+    try:
+        data = request.json
+        new_stage = data.get('stage')
+        
+        if new_stage not in ['New', 'Response', 'Recovery', 'Closed']:
+            return jsonify({'success': False, 'error': 'Invalid stage'}), 400
+        
+        success = incident_mgr.update_incident_stage(incident_id, new_stage)
+        
+        if success:
+            return jsonify({'success': True, 'stage': new_stage})
+        else:
+            return jsonify({'success': False, 'error': 'Incident not found'}), 404
+            
+    except Exception as e:
+        app.logger.error(f"Error updating incident stage: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/unit-checkin', methods=['POST'])
