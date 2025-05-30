@@ -942,51 +942,6 @@ def unit_status_update():
     """Unit status update page"""
     return render_template('unit_status_update.html')
 
-
-@app.route('/api/unit-status-update', methods=['POST'])
-def submit_unit_status_update():
-    """Submit unit status update"""
-    try:
-        data = request.json
-
-        # Validate required fields
-        required_fields = ['incident_id', 'unit_id', 'status_change', 'officer_name']
-        for field in required_fields:
-            if not data.get(field):
-                return jsonify({'success': False, 'error': f'{field} is required'}), 400
-
-        # Submit status update
-        update_id = incident_mgr.submit_unit_status_update(data)
-
-        # Determine appropriate response message
-        status = data['status_change']
-        unit_id = data['unit_id']
-        assistance_note = " (Assistance requested)" if data.get('need_assistance') else ""
-
-        message = f"Unit {unit_id} status updated to {status}{assistance_note}"
-
-        return jsonify({
-            'success': True,
-            'update_id': update_id,
-            'message': message
-        })
-
-    except Exception as e:
-        app.logger.error(f"Error submitting unit status update: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@app.route('/api/incident/<incident_id>/status-updates')
-def get_incident_status_updates(incident_id):
-    """Get all status updates for an incident"""
-    try:
-        updates = incident_mgr.get_unit_status_updates(incident_id)
-        return jsonify({'success': True, 'updates': updates})
-    except Exception as e:
-        app.logger.error(f"Error getting status updates: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
 @app.route('/api/incident/<incident_id>/unit/<unit_id>/status-updates')
 def get_unit_status_updates_api(incident_id, unit_id):
     """Get status updates for a specific unit"""
@@ -1117,18 +1072,6 @@ def get_incident_status_updates(incident_id):
     except Exception as e:
         app.logger.error(f"Error getting status updates: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@app.route('/api/incident/<incident_id>/unit/<unit_id>/status-updates')
-def get_unit_status_updates_api(incident_id, unit_id):
-    """Get status updates for a specific unit"""
-    try:
-        updates = incident_mgr.get_unit_status_updates(incident_id, unit_id)
-        return jsonify({'success': True, 'updates': updates})
-    except Exception as e:
-        app.logger.error(f"Error getting unit status updates: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
 
 @app.route('/api/unit-checkin', methods=['POST'])
 def submit_unit_checkin():
