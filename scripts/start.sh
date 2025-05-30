@@ -15,7 +15,7 @@ docker-compose exec postgis pg_isready -U postgres -d emergency_ops
 docker-compose exec incident_app curl -f http://localhost:5000/health
 
 echo "Services started successfully!"
-echo "Application: http://localhost"
+echo "Application: http://localhost:8081"
 echo "GeoServer: http://localhost:8080/geoserver"
 echo "PostgREST API: http://localhost:3000"
 echo "External IP for QField: $EXTERNAL_IP"

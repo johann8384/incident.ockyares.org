@@ -1,11 +1,11 @@
-Flask==2.3.3
-gunicorn==21.2.0
+Flask>=2.3.3
+gunicorn>=21.2.0
 psycopg2-binary==2.9.7
-geopandas==0.14.0
-shapely==2.0.1
-qrcode[pil]==7.4.2
-Pillow==10.0.0
-requests==2.31.0
+geopandas>=0.14.0
+shapely>=2.0.1
+qrcode[pil]>=7.4.2
+Pillow>=10.0.0
+requests>=2.31.0
 
 # Test dependencies (for development)
 pytest==7.4.3

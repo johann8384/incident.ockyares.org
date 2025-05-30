@@ -93,18 +93,16 @@ services:
       EXTERNAL_DB_HOST: ${EXTERNAL_IP:-localhost}
       FLASK_ENV: production
     volumes:
-      - ./docker/docker/static/qr_codes:/app/static/qr_codes
-      - ./docker/docker/logs:/app/logs
-      - ./docker/docker/templates:/app/templates
+      - ./app/static/qr_codes:/app/static/qr_codes
+      - ./app/logs:/app/logs
+      - ./app/templates:/app/templates
     ports:
       - "5000:5000"
     networks:
       - emergency_network
     depends_on:
-      postgis:
-        condition: service_healthy
-      postgrest:
-        condition: service_healthy
+      - postgis
+      - postgrest
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:5000/health || exit 1"]
@@ -118,16 +116,19 @@ services:
     container_name: emergency_nginx
     volumes:
       - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./docker/static:/var/www/static:ro
+      - ./app/static:/var/www/static:ro
     ports:
-      - "80:80"
-      - "443:443"
+      - "8081:80"
+      - "8443:443"
     networks:
       - emergency_network
     depends_on:
       - incident_app
       - geoserver
       - postgrest
+    extra_hosts:
+      - "incident_app:10.248.1.46"
+      - "otherhost:50.31.209.229"
     restart: unless-stopped
 
   # Redis for caching (optional)

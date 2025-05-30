@@ -1,5 +1,6 @@
 # Use specific version and digest for reproducibility
-FROM python:3.11.7-slim@sha256:f11725a1e96c09b1ac0dd8e8310a4f9bc7bb8c5ba3d72cfef5e17ba6e8b593c6
+#FROM python:3.11.7-slim@sha256:f11725a1e96c09b1ac0dd8e8310a4f9bc7bb8c5ba3d72cfef5e17ba6e8b593c6
+FROM python:3.11.7-slim
 
 # Set labels for better metadata
 LABEL maintainer="Emergency Response Team <emergency@ockyeoc.org>"
@@ -73,7 +74,6 @@ CMD ["gunicorn", \
      "--workers", "4", \
      "--worker-class", "sync", \
      "--timeout", "120", \
-     "--keepalive", "5", \
      "--max-requests", "1000", \
      "--max-requests-jitter", "100", \
      "--preload", \
