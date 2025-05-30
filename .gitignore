@@ -1,4 +1,6 @@
+.idea/
 logs/*
 static/qr_codes/*
+docker/database/data/
 docker/geoserver_data
 docker/postgis_data
