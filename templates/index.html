@@ -139,7 +139,7 @@
             </div>
             
             <div class="text-center">
-                <button type="submit" class="btn btn-primary btn-lg" id="submit-btn">
+                <button type="button" class="btn btn-primary btn-lg" id="submit-btn">
                     <span class="spinner-border spinner-border-sm me-2" id="loading-spinner" style="display: none;"></span>
                     Create Incident and Generate Divisions
                 </button>
@@ -158,6 +158,7 @@ let searchAreaLayer;
 let searchAreaCoordinates = [];
 let searchAreaSizeM2 = 0;
 let mapMode = 'none'; // 'location', 'drawing', or 'none'
+let formSubmissionInProgress = false; // Prevent multiple submissions
 
 // Initialize map
 function initMap() {
@@ -169,6 +170,10 @@ function initMap() {
     
     // Single click handler that routes to the appropriate function based on mode
     map.on('click', function(e) {
+        // Prevent any form submission during map interactions
+        e.originalEvent.stopPropagation();
+        e.originalEvent.preventDefault();
+        
         if (mapMode === 'location') {
             setIncidentLocation(e);
         } else if (mapMode === 'drawing') {
@@ -396,9 +401,13 @@ function clearSearchArea() {
     document.getElementById('division_count').value = 4;
 }
 
-// Form submission
-function submitForm(e) {
-    e.preventDefault();
+// Form submission - ONLY triggered by explicit button click
+function submitIncident() {
+    // Prevent multiple submissions
+    if (formSubmissionInProgress) {
+        console.log('Form submission already in progress, ignoring duplicate request');
+        return;
+    }
     
     // Make sure we're not in any special mode
     if (mapMode === 'drawing') {
@@ -408,35 +417,68 @@ function submitForm(e) {
         exitLocationMode();
     }
     
-    // Show loading state
-    document.getElementById('loading-spinner').style.display = 'inline-block';
-    document.getElementById('submit-btn').disabled = true;
+    // Validate form before submission
+    const incidentName = document.getElementById('incident_name').value.trim();
+    const incidentType = document.getElementById('incident_type').value;
+    const icName = document.getElementById('ic_name').value.trim();
+    const latitude = document.getElementById('latitude').value;
+    const longitude = document.getElementById('longitude').value;
     
-    // Collect form data
-    const formData = {
-        incident: {
-            incident_name: document.getElementById('incident_name').value,
-            incident_type: document.getElementById('incident_type').value,
-            ic_name: document.getElementById('ic_name').value,
-            latitude: document.getElementById('latitude').value,
-            longitude: document.getElementById('longitude').value,
-            description: document.getElementById('description').value
-        },
-        search_area_coordinates: searchAreaCoordinates,
-        division_count: parseInt(document.getElementById('division_count').value),
-        teams: [] // Empty teams array - divisions will be created without pre-assigned teams
-    };
+    if (!incidentName) {
+        showError('Please enter an incident name');
+        return;
+    }
     
-    // Validate
+    if (!incidentType) {
+        showError('Please select an incident type');
+        return;
+    }
+    
+    if (!icName) {
+        showError('Please enter an incident commander name');
+        return;
+    }
+    
+    if (!latitude || !longitude) {
+        showError('Please set the incident location');
+        return;
+    }
+    
     if (searchAreaCoordinates.length < 3) {
         showError('Please define a search area with at least 3 points');
         return;
     }
     
-    if (!formData.division_count || formData.division_count < 1) {
+    const divisionCount = parseInt(document.getElementById('division_count').value);
+    if (!divisionCount || divisionCount < 1) {
         showError('Please specify at least 1 search division');
         return;
     }
+    
+    // Set submission in progress
+    formSubmissionInProgress = true;
+    
+    // Show loading state
+    document.getElementById('loading-spinner').style.display = 'inline-block';
+    document.getElementById('submit-btn').disabled = true;
+    document.getElementById('submit-btn').textContent = 'Creating Incident...';
+    
+    // Collect form data
+    const formData = {
+        incident: {
+            incident_name: incidentName,
+            incident_type: incidentType,
+            ic_name: icName,
+            latitude: latitude,
+            longitude: longitude,
+            description: document.getElementById('description').value.trim()
+        },
+        search_area_coordinates: searchAreaCoordinates,
+        division_count: divisionCount,
+        teams: [] // Empty teams array - divisions will be created without pre-assigned teams
+    };
+    
+    console.log('Submitting incident creation request:', formData);
     
     // Submit to backend
     fetch('/create_incident', {
@@ -449,17 +491,23 @@ function submitForm(e) {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
+            console.log('Incident created successfully:', data.incident_id);
             showSuccess(data.incident_id);
         } else {
+            console.error('Incident creation failed:', data.error);
             showError(data.error);
         }
     })
     .catch(error => {
+        console.error('Network error during incident creation:', error);
         showError('Network error: ' + error.message);
     })
     .finally(() => {
+        // Reset submission state
+        formSubmissionInProgress = false;
         document.getElementById('loading-spinner').style.display = 'none';
         document.getElementById('submit-btn').disabled = false;
+        document.getElementById('submit-btn').textContent = 'Create Incident and Generate Divisions';
     });
 }
 
@@ -485,8 +533,11 @@ function showError(message) {
 document.addEventListener('DOMContentLoaded', function() {
     initMap();
     
-    // Mode toggle buttons
-    document.getElementById('location-mode-btn').addEventListener('click', function() {
+    // Mode toggle buttons - all type="button" to prevent form submission
+    document.getElementById('location-mode-btn').addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        
         if (mapMode === 'location') {
             exitLocationMode();
         } else {
@@ -494,7 +545,10 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
-    document.getElementById('drawing-btn').addEventListener('click', function() {
+    document.getElementById('drawing-btn').addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        
         if (mapMode === 'drawing') {
             exitDrawingMode();
         } else {
@@ -502,14 +556,41 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
-    document.getElementById('clear-area').addEventListener('click', clearSearchArea);
-    document.getElementById('incident-form').addEventListener('submit', submitForm);
+    document.getElementById('clear-area').addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        clearSearchArea();
+    });
+    
+    // ONLY the submit button should trigger form submission
+    document.getElementById('submit-btn').addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        submitIncident();
+    });
+    
+    // Prevent form submission via Enter key or any other means
+    document.getElementById('incident-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        console.log('Form submit event prevented - use the Create Incident button');
+    });
     
     // Listen for division count changes
     document.getElementById('division_count').addEventListener('input', updateDivisionInfo);
     
     // Initialize mode status
     updateModeStatus();
+    
+    console.log('Incident creation form initialized');
+});
+
+// Prevent any accidental form submissions via keyboard
+document.addEventListener('keydown', function(e) {
+    // Prevent Enter key from submitting the form unless focus is on submit button
+    if (e.key === 'Enter' && e.target.id !== 'submit-btn') {
+        e.preventDefault();
+    }
 });
 </script>
 {% endblock %}
