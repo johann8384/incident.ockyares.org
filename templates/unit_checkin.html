@@ -373,7 +373,7 @@
         let map = null;
         let marker = null;
         let incidentLocation = null;
-        let selectedIncident = null;
+        let incidents = [];
 
         // Load incidents on page load
         document.addEventListener('DOMContentLoaded', function() {
@@ -390,6 +390,7 @@
                 select.innerHTML = '<option value="">Select an incident...</option>';
                 
                 if (data.success) {
+                    incidents = data.incidents;
                     data.incidents.forEach(incident => {
                         const option = document.createElement('option');
                         option.value = incident.incident_id;
@@ -408,7 +409,14 @@
             document.getElementById('incidentSelect').addEventListener('change', function() {
                 const incidentId = this.value;
                 if (incidentId) {
-                    loadIncidentDetails(incidentId);
+                    // Find the selected incident and set location
+                    const selectedIncident = incidents.find(inc => inc.incident_id === incidentId);
+                    if (selectedIncident && selectedIncident.latitude && selectedIncident.longitude) {
+                        incidentLocation = {
+                            lat: selectedIncident.latitude,
+                            lng: selectedIncident.longitude
+                        };
+                    }
                 }
             });
 
@@ -425,40 +433,14 @@
             document.getElementById('checkinForm').addEventListener('submit', submitCheckin);
         }
 
-        async function loadIncidentDetails(incidentId) {
-            try {
-                const response = await fetch(`/api/incident/${incidentId}`);
-                const data = await response.json();
-                
-                if (data.success && data.incident) {
-                    selectedIncident = data.incident;
-                    // Extract incident location for map centering
-                    if (selectedIncident.center_point && selectedIncident.center_point.coordinates) {
-                        incidentLocation = {
-                            lat: selectedIncident.center_point.coordinates[1],
-                            lng: selectedIncident.center_point.coordinates[0]
-                        };
-                    } else if (selectedIncident.latitude && selectedIncident.longitude) {
-                        incidentLocation = {
-                            lat: selectedIncident.latitude,
-                            lng: selectedIncident.longitude
-                        };
-                    }
-                }
-            } catch (error) {
-                console.error('Error loading incident details:', error);
-            }
-        }
-
         function initMap() {
             if (map) {
                 map.remove(); // Clean up existing map
             }
 
-            // Default center (will be updated with incident location)
+            // Use incident location if available, otherwise default
             let center = [37.7749, -122.4194]; // Default to San Francisco
             
-            // Use incident location if available
             if (incidentLocation) {
                 center = [incidentLocation.lat, incidentLocation.lng];
             }
@@ -479,6 +461,10 @@
                         className: 'emoji-marker'
                     })
                 }).addTo(map);
+                
+                const selectedIncident = incidents.find(inc => 
+                    inc.latitude === incidentLocation.lat && inc.longitude === incidentLocation.lng
+                );
                 
                 incidentMarker.bindPopup(`<b>Incident Location</b><br>${selectedIncident ? selectedIncident.incident_name : 'Emergency Incident'}`);
             }
