@@ -133,12 +133,34 @@ class IncidentManager:
             self.close_db()
 
     def submit_unit_checkin(self, checkin_data):
-        """Submit unit check-in data"""
+        """Submit unit check-in data and create/update unit record"""
         conn = self.connect_db()
         cursor = conn.cursor()
         
         try:
-            # Insert into units table (create if doesn't exist)
+            # First, insert or update the unit record
+            cursor.execute("""
+                INSERT INTO units (
+                    unit_id, incident_id, officer_name, personnel_count, equipment_status, unit_status
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (unit_id, incident_id) DO UPDATE SET
+                    officer_name = EXCLUDED.officer_name,
+                    personnel_count = EXCLUDED.personnel_count,
+                    equipment_status = EXCLUDED.equipment_status,
+                    updated_at = NOW()
+                RETURNING id
+            """, (
+                checkin_data['unit_id'],
+                checkin_data['incident_id'],
+                checkin_data['officer_name'],
+                int(checkin_data['personnel_count']),
+                checkin_data['equipment_status'],
+                'staging'  # Default status when checking in
+            ))
+            
+            unit_record_id = cursor.fetchone()[0]
+            
+            # Then insert the check-in record
             cursor.execute("""
                 INSERT INTO unit_checkins (
                     incident_id, unit_id, officer_name, personnel_count,
@@ -166,6 +188,86 @@ class IncidentManager:
         except Exception as e:
             conn.rollback()
             app.logger.error(f"Failed to submit unit check-in: {e}")
+            raise e
+        finally:
+            cursor.close()
+            self.close_db()
+
+    def get_incident_units(self, incident_id):
+        """Get all units for an incident with their current status"""
+        conn = self.connect_db()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        
+        try:
+            cursor.execute("""
+                SELECT u.unit_id, u.officer_name, u.personnel_count, u.equipment_status,
+                       u.unit_status, u.assigned_division, u.created_at, u.updated_at,
+                       uc.checkin_time, uc.photo_path,
+                       ST_X(uc.location_point) as longitude, ST_Y(uc.location_point) as latitude
+                FROM units u
+                LEFT JOIN LATERAL (
+                    SELECT checkin_time, photo_path, location_point
+                    FROM unit_checkins 
+                    WHERE unit_checkins.unit_id = u.unit_id 
+                      AND unit_checkins.incident_id = u.incident_id
+                    ORDER BY checkin_time DESC 
+                    LIMIT 1
+                ) uc ON true
+                WHERE u.incident_id = %s
+                ORDER BY u.unit_id
+            """, (incident_id,))
+            
+            units = []
+            for unit in cursor.fetchall():
+                unit_dict = dict(unit)
+                # Convert datetime objects to strings for JSON serialization
+                if unit_dict['created_at']:
+                    unit_dict['created_at'] = unit_dict['created_at'].isoformat()
+                if unit_dict['updated_at']:
+                    unit_dict['updated_at'] = unit_dict['updated_at'].isoformat()
+                if unit_dict['checkin_time']:
+                    unit_dict['checkin_time'] = unit_dict['checkin_time'].isoformat()
+                units.append(unit_dict)
+            
+            app.logger.info(f"Retrieved {len(units)} units for incident {incident_id}")
+            return units
+            
+        except Exception as e:
+            app.logger.error(f"Failed to get incident units: {e}")
+            raise e
+        finally:
+            cursor.close()
+            self.close_db()
+
+    def update_unit_status(self, incident_id, unit_id, new_status):
+        """Update unit status"""
+        conn = self.connect_db()
+        cursor = conn.cursor()
+        
+        try:
+            # Validate status
+            valid_statuses = ['staging', 'assigned', 'operating', 'recovering', 'returned']
+            if new_status not in valid_statuses:
+                raise ValueError(f"Invalid status. Must be one of: {', '.join(valid_statuses)}")
+            
+            cursor.execute("""
+                UPDATE units 
+                SET unit_status = %s, updated_at = NOW()
+                WHERE incident_id = %s AND unit_id = %s
+                RETURNING unit_id
+            """, (new_status, incident_id, unit_id))
+            
+            result = cursor.fetchone()
+            if not result:
+                raise ValueError("Unit not found")
+            
+            conn.commit()
+            app.logger.info(f"Updated unit {unit_id} status to {new_status}")
+            return True
+            
+        except Exception as e:
+            conn.rollback()
+            app.logger.error(f"Failed to update unit status: {e}")
             raise e
         finally:
             cursor.close()
@@ -246,11 +348,19 @@ class IncidentManager:
         cursor = conn.cursor()
         
         try:
+            # Update the division
             cursor.execute("""
                 UPDATE search_divisions 
                 SET assigned_team = %s, team_leader = %s, status = 'assigned'
                 WHERE incident_id = %s AND division_id = %s
             """, (unit_id, officer_name, incident_id, division_id))
+            
+            # Update the unit status and assignment
+            cursor.execute("""
+                UPDATE units 
+                SET unit_status = 'assigned', assigned_division = %s, updated_at = NOW()
+                WHERE incident_id = %s AND unit_id = %s
+            """, (division_id, incident_id, unit_id))
             
             conn.commit()
             app.logger.info(f"Unit {unit_id} assigned to division {division_id}")
@@ -730,6 +840,26 @@ def update_incident_stage(incident_id):
         app.logger.error(f"Error updating incident stage: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/api/incident/<incident_id>/unit/<unit_id>/status', methods=['PUT'])
+def update_unit_status(incident_id, unit_id):
+    """Update unit status"""
+    try:
+        data = request.json
+        new_status = data.get('status')
+        
+        if not new_status:
+            return jsonify({'success': False, 'error': 'Status is required'}), 400
+        
+        incident_mgr.update_unit_status(incident_id, unit_id, new_status)
+        
+        return jsonify({'success': True, 'message': f'Unit {unit_id} status updated to {new_status}'})
+        
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        app.logger.error(f"Error updating unit status: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/api/unit-checkin', methods=['POST'])
 def submit_unit_checkin():
     """Submit unit check-in"""
@@ -845,7 +975,10 @@ def get_incident_data(incident_id):
         # Get divisions
         divisions = incident_mgr.get_incident_divisions(incident_id)
         
-        # Get unit check-ins
+        # Get units (new method)
+        units = incident_mgr.get_incident_units(incident_id)
+        
+        # Get unit check-ins (for backwards compatibility)
         unit_checkins = incident_mgr.get_incident_unit_checkins(incident_id)
         
         # Get QR codes (for any assigned teams)
@@ -855,6 +988,7 @@ def get_incident_data(incident_id):
             'success': True,
             'incident': incident,
             'divisions': divisions,
+            'units': units,
             'unit_checkins': unit_checkins,
             'qr_codes': qr_codes
         })
