@@ -251,6 +251,14 @@
             width: 100%;
         }
 
+        .emoji-marker {
+            background: none !important;
+            border: none !important;
+            text-align: center;
+            font-size: 20px;
+            line-height: 30px;
+        }
+
         @media (max-width: 480px) {
             .container {
                 margin: 5px;
@@ -372,6 +380,7 @@
         // Global variables
         let map = null;
         let marker = null;
+        let incidentMarker = null;
         let incidentLocation = null;
         let incidents = [];
 
@@ -414,8 +423,14 @@
                     if (selectedIncident && selectedIncident.latitude && selectedIncident.longitude) {
                         incidentLocation = {
                             lat: selectedIncident.latitude,
-                            lng: selectedIncident.longitude
+                            lng: selectedIncident.longitude,
+                            name: selectedIncident.incident_name
                         };
+                        
+                        // If map is already showing, update it
+                        if (map && document.getElementById('mapContainer').style.display !== 'none') {
+                            updateMapWithIncident();
+                        }
                     }
                 }
             });
@@ -452,9 +467,24 @@
                 attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             }).addTo(map);
 
+            // Add incident marker
+            addIncidentMarker();
+
+            // Add click handler for map
+            map.on('click', function(e) {
+                setLocationFromMap(e.latlng.lat, e.latlng.lng);
+            });
+        }
+
+        function addIncidentMarker() {
+            // Remove existing incident marker
+            if (incidentMarker) {
+                map.removeLayer(incidentMarker);
+            }
+
             // Add incident marker if location is available
-            if (incidentLocation) {
-                const incidentMarker = L.marker([incidentLocation.lat, incidentLocation.lng], {
+            if (incidentLocation && map) {
+                incidentMarker = L.marker([incidentLocation.lat, incidentLocation.lng], {
                     icon: L.divIcon({
                         html: '🚨',
                         iconSize: [30, 30],
@@ -462,32 +492,17 @@
                     })
                 }).addTo(map);
                 
-                const selectedIncident = incidents.find(inc => 
-                    inc.latitude === incidentLocation.lat && inc.longitude === incidentLocation.lng
-                );
-                
-                incidentMarker.bindPopup(`<b>Incident Location</b><br>${selectedIncident ? selectedIncident.incident_name : 'Emergency Incident'}`);
+                incidentMarker.bindPopup(`<b>Incident Location</b><br>${incidentLocation.name || 'Emergency Incident'}`);
             }
+        }
 
-            // Add click handler for map
-            map.on('click', function(e) {
-                setLocationFromMap(e.latlng.lat, e.latlng.lng);
-            });
-
-            // Add custom CSS for emoji markers
-            if (!document.getElementById('emoji-marker-style')) {
-                const style = document.createElement('style');
-                style.id = 'emoji-marker-style';
-                style.textContent = `
-                    .emoji-marker {
-                        background: none !important;
-                        border: none !important;
-                        text-align: center;
-                        font-size: 20px;
-                        line-height: 30px;
-                    }
-                `;
-                document.head.appendChild(style);
+        function updateMapWithIncident() {
+            if (map && incidentLocation) {
+                // Pan to incident location
+                map.setView([incidentLocation.lat, incidentLocation.lng], 15);
+                
+                // Add/update incident marker
+                addIncidentMarker();
             }
         }
 
@@ -536,7 +551,7 @@
         function setLocationFromMap(lat, lng) {
             setLocation(lat, lng);
             
-            // Update or add marker on map
+            // Update or add unit marker on map
             if (marker) {
                 marker.setLatLng([lat, lng]);
             } else {
