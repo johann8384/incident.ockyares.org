@@ -208,7 +208,7 @@ function updateStage() {
     saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
     saveBtn.disabled = true;
     
-    fetch(`/api/incident/${incidentId}/stage`, {
+    fetch(`/app/incident/${incidentId}/stage`, {
         method: 'PUT',
         headers: {
             'Content-Type': 'application/json'
@@ -250,7 +250,7 @@ function updateUnitStatus(unitId, newStatus) {
     const originalHTML = statusElement.innerHTML;
     statusElement.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Updating...';
     
-    fetch(`/api/incident/${incidentId}/unit/${unitId}/status`, {
+    fetch(`/app/incident/${incidentId}/unit/${unitId}/status`, {
         method: 'PUT',
         headers: {
             'Content-Type': 'application/json'
@@ -583,7 +583,7 @@ function formatDateTime(dateString) {
 function refreshIncidentData() {
     const incidentId = '{{ incident_id }}';
     
-    fetch(`/api/incident/${incidentId}`)
+    fetch(`/app/incident/${incidentId}`)
         .then(response => response.json())
         .then(data => {
             if (data.success) {
@@ -649,7 +649,7 @@ function refreshIncidentData() {
 document.addEventListener('DOMContentLoaded', function() {
     const incidentId = '{{ incident_id }}';
     
-    fetch(`/api/incident/${incidentId}`)
+    fetch(`/app/incident/${incidentId}`)
         .then(response => response.json())
         .then(data => {
             if (data.success) {
