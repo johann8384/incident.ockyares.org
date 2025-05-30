@@ -4,6 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Unit Check-In - Emergency Management</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" 
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" 
+          crossorigin="" />
+    
     <style>
         * {
             margin: 0;
@@ -233,16 +239,16 @@
         }
 
         .map-container {
-            height: 200px;
-            background: #e9ecef;
-            border: 2px dashed #6c757d;
+            height: 250px;
             border-radius: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #6c757d;
             margin: 10px 0;
-            cursor: pointer;
+            overflow: hidden;
+            border: 2px solid #e1e8ed;
+        }
+
+        #map {
+            height: 100%;
+            width: 100%;
         }
 
         @media (max-width: 480px) {
@@ -319,7 +325,7 @@
                     </div>
 
                     <div class="map-container" id="mapContainer" style="display: none;">
-                        <p>Tap to set location</p>
+                        <div id="map"></div>
                     </div>
 
                     <div class="coordinates" id="coordinates" style="display: none;">
@@ -357,10 +363,17 @@
         </div>
     </div>
 
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" 
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" 
+            crossorigin=""></script>
+
     <script>
         // Global variables
         let map = null;
         let marker = null;
+        let incidentLocation = null;
+        let selectedIncident = null;
 
         // Load incidents on page load
         document.addEventListener('DOMContentLoaded', function() {
@@ -391,6 +404,14 @@
         }
 
         function setupEventListeners() {
+            // Incident selection
+            document.getElementById('incidentSelect').addEventListener('change', function() {
+                const incidentId = this.value;
+                if (incidentId) {
+                    loadIncidentDetails(incidentId);
+                }
+            });
+
             // GPS location button
             document.getElementById('getLocationBtn').addEventListener('click', getCurrentLocation);
             
@@ -402,6 +423,86 @@
             
             // Form submission
             document.getElementById('checkinForm').addEventListener('submit', submitCheckin);
+        }
+
+        async function loadIncidentDetails(incidentId) {
+            try {
+                const response = await fetch(`/api/incident/${incidentId}`);
+                const data = await response.json();
+                
+                if (data.success && data.incident) {
+                    selectedIncident = data.incident;
+                    // Extract incident location for map centering
+                    if (selectedIncident.center_point && selectedIncident.center_point.coordinates) {
+                        incidentLocation = {
+                            lat: selectedIncident.center_point.coordinates[1],
+                            lng: selectedIncident.center_point.coordinates[0]
+                        };
+                    } else if (selectedIncident.latitude && selectedIncident.longitude) {
+                        incidentLocation = {
+                            lat: selectedIncident.latitude,
+                            lng: selectedIncident.longitude
+                        };
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading incident details:', error);
+            }
+        }
+
+        function initMap() {
+            if (map) {
+                map.remove(); // Clean up existing map
+            }
+
+            // Default center (will be updated with incident location)
+            let center = [37.7749, -122.4194]; // Default to San Francisco
+            
+            // Use incident location if available
+            if (incidentLocation) {
+                center = [incidentLocation.lat, incidentLocation.lng];
+            }
+
+            map = L.map('map').setView(center, 15);
+
+            // Add OpenStreetMap tiles
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }).addTo(map);
+
+            // Add incident marker if location is available
+            if (incidentLocation) {
+                const incidentMarker = L.marker([incidentLocation.lat, incidentLocation.lng], {
+                    icon: L.divIcon({
+                        html: '🚨',
+                        iconSize: [30, 30],
+                        className: 'emoji-marker'
+                    })
+                }).addTo(map);
+                
+                incidentMarker.bindPopup(`<b>Incident Location</b><br>${selectedIncident ? selectedIncident.incident_name : 'Emergency Incident'}`);
+            }
+
+            // Add click handler for map
+            map.on('click', function(e) {
+                setLocationFromMap(e.latlng.lat, e.latlng.lng);
+            });
+
+            // Add custom CSS for emoji markers
+            if (!document.getElementById('emoji-marker-style')) {
+                const style = document.createElement('style');
+                style.id = 'emoji-marker-style';
+                style.textContent = `
+                    .emoji-marker {
+                        background: none !important;
+                        border: none !important;
+                        text-align: center;
+                        font-size: 20px;
+                        line-height: 30px;
+                    }
+                `;
+                document.head.appendChild(style);
+            }
         }
 
         function getCurrentLocation() {
@@ -439,30 +540,30 @@
         function showMapPicker() {
             const mapContainer = document.getElementById('mapContainer');
             mapContainer.style.display = 'block';
-            mapContainer.innerHTML = `
-                <div style="text-align: center; padding: 20px;">
-                    <p>Interactive map would be loaded here</p>
-                    <p style="font-size: 0.9rem; color: #666; margin-top: 10px;">
-                        Click "Use GPS" for location or manually enter coordinates
-                    </p>
-                    <div style="margin-top: 15px;">
-                        <input type="number" id="manualLat" placeholder="Latitude" step="any" style="width: 45%; margin-right: 5%;">
-                        <input type="number" id="manualLng" placeholder="Longitude" step="any" style="width: 45%;">
-                        <button type="button" onclick="setManualLocation()" style="width: 100%; margin-top: 10px;" class="btn btn-primary">Set Location</button>
-                    </div>
-                </div>
-            `;
+            
+            // Initialize map after container is visible
+            setTimeout(() => {
+                initMap();
+            }, 100);
         }
 
-        function setManualLocation() {
-            const lat = parseFloat(document.getElementById('manualLat').value);
-            const lng = parseFloat(document.getElementById('manualLng').value);
+        function setLocationFromMap(lat, lng) {
+            setLocation(lat, lng);
             
-            if (lat && lng && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-                setLocation(lat, lng);
+            // Update or add marker on map
+            if (marker) {
+                marker.setLatLng([lat, lng]);
             } else {
-                showAlert('Please enter valid coordinates', 'error');
+                marker = L.marker([lat, lng], {
+                    icon: L.divIcon({
+                        html: '📍',
+                        iconSize: [30, 30],
+                        className: 'emoji-marker'
+                    })
+                }).addTo(map);
             }
+            
+            marker.bindPopup('<b>Unit Location</b><br>Selected check-in location').openPopup();
         }
 
         function setLocation(lat, lng) {
