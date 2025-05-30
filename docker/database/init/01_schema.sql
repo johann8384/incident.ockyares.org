@@ -15,7 +15,6 @@ CREATE TABLE incidents (
     start_time TIMESTAMP DEFAULT NOW(),
     end_time TIMESTAMP,
     status VARCHAR(50) DEFAULT 'active',
-    incident_stage VARCHAR(50) DEFAULT 'New',
     center_point GEOMETRY(POINT, 4326),
     description TEXT,
     created_at TIMESTAMP DEFAULT NOW(),
@@ -28,7 +27,7 @@ CREATE TABLE search_areas (
     incident_id VARCHAR(50) REFERENCES incidents(incident_id),
     area_name VARCHAR(255) NOT NULL,
     area_type VARCHAR(50) NOT NULL,
-    priority VARCHAR(50) DEFAULT 'Medium',
+    priority INTEGER DEFAULT 1,
     geom GEOMETRY(POLYGON, 4326),
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
@@ -42,7 +41,7 @@ CREATE TABLE search_divisions (
     division_name VARCHAR(255) NOT NULL,
     assigned_team VARCHAR(255),
     team_leader VARCHAR(255),
-    priority VARCHAR(50) DEFAULT 'Medium',
+    priority INTEGER DEFAULT 1,
     search_type VARCHAR(50) DEFAULT 'primary',
     estimated_duration VARCHAR(50),
     status VARCHAR(50) DEFAULT 'unassigned',
@@ -84,7 +83,6 @@ CREATE TABLE unit_checkins (
 
 -- Create indexes
 CREATE INDEX idx_incidents_id ON incidents(incident_id);
-CREATE INDEX idx_incidents_stage ON incidents(incident_stage);
 CREATE INDEX idx_search_areas_incident ON search_areas(incident_id);
 CREATE INDEX idx_search_divisions_incident ON search_divisions(incident_id);
 CREATE INDEX idx_search_progress_incident ON search_progress(incident_id);
