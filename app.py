@@ -14,16 +14,13 @@ import base64
 import logging
 from logging.handlers import RotatingFileHandler
 
-# Configure Flask app with correct template and static directories
-app = Flask(__name__, 
-            template_folder='app/templates',
-            static_folder='app/static')
+app = Flask(__name__)
 
 # Configure logging
 if not app.debug:
-    if not os.path.exists('app/logs'):
-        os.makedirs('app/logs')
-    file_handler = RotatingFileHandler('app/logs/incident_app.log', maxBytes=10240, backupCount=10)
+    if not os.path.exists('logs'):
+        os.mkdir('logs')
+    file_handler = RotatingFileHandler('logs/incident_app.log', maxBytes=10240, backupCount=10)
     file_handler.setFormatter(logging.Formatter(
         '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
     ))
@@ -186,7 +183,7 @@ class IncidentManager:
             qr_codes = {}
             for team_id, team_info in teams.items():
                 qr_filename = f"qr_{incident_id}_{team_id}.png"
-                qr_path = os.path.join('app/static', 'qr_codes', qr_filename)
+                qr_path = os.path.join('static', 'qr_codes', qr_filename)
                 
                 if os.path.exists(qr_path):
                     # Load existing QR code
@@ -463,7 +460,7 @@ class IncidentManager:
             
             # Save QR code to file
             qr_filename = f"qr_{incident_id}_{team['team_id']}.png"
-            qr_path = os.path.join('app/static', 'qr_codes', qr_filename)
+            qr_path = os.path.join('static', 'qr_codes', qr_filename)
             os.makedirs(os.path.dirname(qr_path), exist_ok=True)
             qr_image.save(qr_path)
             
@@ -591,7 +588,7 @@ def get_incident_data(incident_id):
 def get_qr_code(filename):
     """Serve QR code images"""
     try:
-        return send_file(os.path.join('app/static', 'qr_codes', filename))
+        return send_file(os.path.join('static', 'qr_codes', filename))
     except Exception as e:
         app.logger.error(f"Error serving QR code {filename}: {e}")
         return "QR Code not found", 404
