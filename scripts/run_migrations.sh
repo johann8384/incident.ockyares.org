@@ -13,6 +13,9 @@ DB_NAME="${DB_NAME:-emergency_ops}"
 DB_USER="${DB_USER:-postgres}"
 DB_PASSWORD="${DB_PASSWORD:-emergency_password}"
 
+# Migration directory
+MIGRATIONS_DIR="./docker/database/migrations"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -89,7 +92,7 @@ is_migration_applied() {
     local count
     
     count=$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -t -c \
-        "SELECT COUNT(*) FROM schema_migrations WHERE migration_name = '$migration_name';")
+        "SELECT COUNT(*) FROM schema_migrations WHERE migration_name = '$migration_name';" | tr -d ' ')
     
     [ "$count" -gt 0 ]
 }
@@ -127,19 +130,16 @@ apply_migration() {
 
 # Function to run all migrations
 run_all_migrations() {
-    local migrations_dir="./migrations"
-    local migration_files
-    
-    if [ ! -d "$migrations_dir" ]; then
-        print_error "Migrations directory not found: $migrations_dir"
+    if [ ! -d "$MIGRATIONS_DIR" ]; then
+        print_error "Migrations directory not found: $MIGRATIONS_DIR"
         exit 1
     fi
     
     # Get all .sql files in migrations directory, sorted
-    migration_files=$(find "$migrations_dir" -name "*.sql" | sort)
+    migration_files=$(find "$MIGRATIONS_DIR" -name "*.sql" | sort)
     
     if [ -z "$migration_files" ]; then
-        print_warning "No migration files found in $migrations_dir"
+        print_warning "No migration files found in $MIGRATIONS_DIR"
         return 0
     fi
     
@@ -169,14 +169,14 @@ run_all_migrations() {
 # Function to run specific migration
 run_specific_migration() {
     local migration_number="$1"
-    local migration_file="./migrations/${migration_number}_*.sql"
+    local migration_file
     
     # Find the migration file
-    migration_file=$(find ./migrations -name "${migration_number}_*.sql" | head -1)
+    migration_file=$(find "$MIGRATIONS_DIR" -name "${migration_number}_*.sql" | head -1)
     
     if [ -z "$migration_file" ]; then
         print_error "Migration file not found for number: $migration_number"
-        print_error "Looking for pattern: ${migration_number}_*.sql in ./migrations/"
+        print_error "Looking for pattern: ${migration_number}_*.sql in $MIGRATIONS_DIR/"
         exit 1
     fi
     
@@ -200,8 +200,8 @@ show_migration_status() {
     print_status "Pending migrations:"
     local pending_found=false
     
-    if [ -d "./migrations" ]; then
-        find ./migrations -name "*.sql" | sort | while IFS= read -r migration_file; do
+    if [ -d "$MIGRATIONS_DIR" ]; then
+        find "$MIGRATIONS_DIR" -name "*.sql" | sort | while IFS= read -r migration_file; do
             migration_name=$(basename "$migration_file" .sql)
             if ! is_migration_applied "$migration_name"; then
                 echo "  - $migration_name"
@@ -213,8 +213,55 @@ show_migration_status() {
             echo "  No pending migrations."
         fi
     else
-        echo "  Migrations directory not found."
+        echo "  Migrations directory not found: $MIGRATIONS_DIR"
     fi
+}
+
+# Function to run migrations via Docker (if needed)
+run_docker_migrations() {
+    print_status "Running migrations via Docker..."
+    
+    # Check if docker-compose is available
+    if ! command -v docker-compose &> /dev/null; then
+        print_error "docker-compose command not found."
+        exit 1
+    fi
+    
+    # Run migrations inside the PostgreSQL container
+    docker-compose exec -T postgis psql -U "$DB_USER" -d "$DB_NAME" << 'EOF'
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    id SERIAL PRIMARY KEY,
+    migration_name VARCHAR(255) UNIQUE NOT NULL,
+    applied_at TIMESTAMP DEFAULT NOW(),
+    checksum VARCHAR(64)
+);
+EOF
+    
+    # Apply each migration file
+    for migration_file in "$MIGRATIONS_DIR"/*.sql; do
+        if [ -f "$migration_file" ]; then
+            migration_name=$(basename "$migration_file" .sql)
+            
+            # Check if already applied
+            applied=$(docker-compose exec -T postgis psql -U "$DB_USER" -d "$DB_NAME" -t -c \
+                "SELECT COUNT(*) FROM schema_migrations WHERE migration_name = '$migration_name';" | tr -d ' ')
+            
+            if [ "$applied" -eq 0 ]; then
+                print_status "Applying migration: $migration_name"
+                if docker-compose exec -T postgis psql -U "$DB_USER" -d "$DB_NAME" < "$migration_file"; then
+                    # Record migration
+                    docker-compose exec -T postgis psql -U "$DB_USER" -d "$DB_NAME" -c \
+                        "INSERT INTO schema_migrations (migration_name) VALUES ('$migration_name');"
+                    print_success "Migration $migration_name applied successfully."
+                else
+                    print_error "Migration $migration_name failed!"
+                    exit 1
+                fi
+            else
+                print_warning "Migration $migration_name already applied. Skipping."
+            fi
+        fi
+    done
 }
 
 # Main script logic
@@ -222,32 +269,39 @@ main() {
     echo "=== Database Migration Runner ==="
     echo "Database: $DB_HOST:$DB_PORT/$DB_NAME"
     echo "User: $DB_USER"
+    echo "Migrations Directory: $MIGRATIONS_DIR"
     echo
-    
-    # Check prerequisites
-    check_postgres
-    create_migrations_table
     
     # Handle command line arguments
     case "${1:-}" in
         "status")
+            check_postgres
+            create_migrations_table
             show_migration_status
             ;;
+        "docker")
+            run_docker_migrations
+            ;;
         "")
+            check_postgres
+            create_migrations_table
             print_status "Running all pending migrations..."
             run_all_migrations
             ;;
         [0-9]*)
+            check_postgres
+            create_migrations_table
             print_status "Running specific migration: $1"
             run_specific_migration "$1"
             ;;
         *)
-            echo "Usage: $0 [migration_number|status]"
+            echo "Usage: $0 [migration_number|status|docker]"
             echo
             echo "Examples:"
             echo "  $0           # Run all pending migrations"
-            echo "  $0 001       # Run specific migration 001"
+            echo "  $0 006       # Run specific migration 006"
             echo "  $0 status    # Show migration status"
+            echo "  $0 docker    # Run migrations via docker-compose"
             exit 1
             ;;
     esac
