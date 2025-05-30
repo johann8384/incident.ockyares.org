@@ -13,6 +13,8 @@ from io import BytesIO
 import base64
 import logging
 from logging.handlers import RotatingFileHandler
+import requests
+import time
 
 app = Flask(__name__)
 
@@ -37,6 +39,107 @@ DB_CONFIG = {
     'user': os.getenv('DB_USER', 'postgres'),
     'password': os.getenv('DB_PASSWORD', 'emergency_password')
 }
+
+def reverse_geocode(lat, lng):
+    """
+    Reverse geocode coordinates to get an approximate address
+    Uses Nominatim (OpenStreetMap) as primary service with fallbacks
+    """
+    try:
+        # Primary: Nominatim (OpenStreetMap) - Free, no API key required
+        nominatim_url = f"https://nominatim.openstreetmap.org/reverse"
+        params = {
+            'lat': lat,
+            'lon': lng,
+            'format': 'json',
+            'zoom': 18,  # Address level detail
+            'addressdetails': 1,
+            'extratags': 1
+        }
+        
+        headers = {
+            'User-Agent': 'Emergency-Incident-Management-System/1.0 (emergency@ockyeoc.org)'
+        }
+        
+        response = requests.get(nominatim_url, params=params, headers=headers, timeout=5)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            if 'address' in data:
+                address_parts = data['address']
+                
+                # Build formatted address
+                address_components = []
+                
+                # Street number and name
+                if 'house_number' in address_parts and 'road' in address_parts:
+                    address_components.append(f"{address_parts['house_number']} {address_parts['road']}")
+                elif 'road' in address_parts:
+                    address_components.append(address_parts['road'])
+                elif 'footway' in address_parts:
+                    address_components.append(address_parts['footway'])
+                elif 'path' in address_parts:
+                    address_components.append(address_parts['path'])
+                
+                # City/Town
+                city = (address_parts.get('city') or 
+                       address_parts.get('town') or 
+                       address_parts.get('village') or 
+                       address_parts.get('hamlet'))
+                if city:
+                    address_components.append(city)
+                
+                # County/State
+                county = address_parts.get('county')
+                state = address_parts.get('state')
+                if county:
+                    address_components.append(county)
+                if state:
+                    address_components.append(state)
+                
+                # Postal code
+                postcode = address_parts.get('postcode')
+                if postcode:
+                    address_components.append(postcode)
+                
+                formatted_address = ', '.join(address_components)
+                
+                # If we have a good address, return it
+                if len(address_components) >= 2:
+                    app.logger.info(f"Geocoded {lat}, {lng} to: {formatted_address}")
+                    return {
+                        'success': True,
+                        'address': formatted_address,
+                        'source': 'Nominatim',
+                        'components': address_parts,
+                        'display_name': data.get('display_name', formatted_address)
+                    }
+            
+        app.logger.warning(f"Nominatim returned limited data for {lat}, {lng}")
+        
+    except requests.RequestException as e:
+        app.logger.error(f"Nominatim geocoding failed for {lat}, {lng}: {e}")
+    except Exception as e:
+        app.logger.error(f"Unexpected error during geocoding {lat}, {lng}: {e}")
+    
+    # Fallback: Try a simpler coordinate-based description
+    try:
+        # Simple coordinate-based location description
+        return {
+            'success': True,
+            'address': f"Coordinates: {lat:.6f}, {lng:.6f}",
+            'source': 'Coordinates',
+            'components': {},
+            'display_name': f"Location at {lat:.6f}, {lng:.6f}"
+        }
+    except Exception as e:
+        app.logger.error(f"Coordinate fallback failed: {e}")
+        return {
+            'success': False,
+            'error': 'Geocoding failed',
+            'address': None
+        }
 
 class IncidentManager:
     def __init__(self):
@@ -75,7 +178,9 @@ class IncidentManager:
         
         try:
             cursor.execute("""
-                SELECT incident_id, incident_name, incident_type, start_time, stage
+                SELECT incident_id, incident_name, incident_type, start_time, stage,
+                       ST_X(center_point) as longitude, ST_Y(center_point) as latitude,
+                       address
                 FROM incidents 
                 WHERE stage != 'Closed'
                 ORDER BY start_time DESC
@@ -383,7 +488,7 @@ class IncidentManager:
             # Get basic incident information
             cursor.execute("""
                 SELECT incident_id, incident_name, incident_type, ic_name,
-                       start_time, end_time, stage, description,
+                       start_time, end_time, stage, description, address,
                        ST_X(center_point) as longitude, ST_Y(center_point) as latitude,
                        created_at, updated_at
                 FROM incidents 
@@ -554,7 +659,7 @@ class IncidentManager:
             raise e
     
     def create_incident(self, incident_data):
-        """Create new incident record"""
+        """Create new incident record with geocoded address"""
         conn = self.connect_db()
         cursor = conn.cursor()
         
@@ -562,12 +667,26 @@ class IncidentManager:
             # Generate incident ID
             incident_id = f"USR{datetime.now().strftime('%Y%m%d')}{str(uuid.uuid4())[:4].upper()}"
             
-            # Insert incident
+            # Geocode the location to get an address
+            lat = float(incident_data['latitude'])
+            lng = float(incident_data['longitude'])
+            
+            app.logger.info(f"Geocoding location for incident {incident_id}: {lat}, {lng}")
+            geocode_result = reverse_geocode(lat, lng)
+            
+            address = None
+            if geocode_result['success']:
+                address = geocode_result['address']
+                app.logger.info(f"Geocoded address for incident {incident_id}: {address}")
+            else:
+                app.logger.warning(f"Geocoding failed for incident {incident_id}")
+            
+            # Insert incident with address
             cursor.execute("""
                 INSERT INTO incidents (
                     incident_id, incident_name, incident_type, ic_name, 
-                    start_time, stage, center_point, description
-                ) VALUES (%s, %s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s)
+                    start_time, stage, center_point, description, address
+                ) VALUES (%s, %s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s, %s)
                 RETURNING incident_id
             """, (
                 incident_id,
@@ -576,13 +695,14 @@ class IncidentManager:
                 incident_data['ic_name'],
                 datetime.now(),
                 'New',
-                float(incident_data['longitude']),
-                float(incident_data['latitude']),
-                incident_data.get('description', '')
+                lng,  # longitude first for PostGIS
+                lat,
+                incident_data.get('description', ''),
+                address
             ))
             
             conn.commit()
-            app.logger.info(f"Created incident: {incident_id}")
+            app.logger.info(f"Created incident: {incident_id} at {address or f'{lat}, {lng}'}")
             return incident_id
             
         except Exception as e:
@@ -810,6 +930,29 @@ def unit_checkin():
     """Mobile unit check-in page"""
     return render_template('unit_checkin.html')
 
+@app.route('/api/geocode', methods=['POST'])
+def geocode_location():
+    """API endpoint for reverse geocoding coordinates"""
+    try:
+        data = request.json
+        lat = float(data.get('latitude'))
+        lng = float(data.get('longitude'))
+        
+        result = reverse_geocode(lat, lng)
+        return jsonify(result)
+        
+    except (ValueError, TypeError) as e:
+        return jsonify({
+            'success': False,
+            'error': 'Invalid coordinates provided'
+        }), 400
+    except Exception as e:
+        app.logger.error(f"Geocoding API error: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Geocoding service error'
+        }), 500
+
 @app.route('/api/incidents')
 def get_incidents():
     """API endpoint to get active incidents"""
@@ -920,7 +1063,7 @@ def create_incident():
         if not data.get('search_area_coordinates') or len(data.get('search_area_coordinates', [])) < 3:
             return jsonify({'success': False, 'error': 'Search area must have at least 3 coordinates'}), 400
         
-        # Create incident
+        # Create incident (now includes geocoding)
         incident_id = incident_mgr.create_incident(data['incident'])
         
         # Create search area
