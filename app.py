@@ -204,7 +204,7 @@ class IncidentManager:
                 SELECT incident_id, incident_name, incident_type, ic_name,
                        start_time, end_time, status, description,
                        ST_X(center_point) as longitude, ST_Y(center_point) as latitude,
-                       created_at, updated_at
+                       created_at
                 FROM incidents 
                 WHERE incident_id = %s
             """, (incident_id,))
@@ -220,8 +220,6 @@ class IncidentManager:
                 incident['end_time'] = incident['end_time'].isoformat()
             if incident['created_at']:
                 incident['created_at'] = incident['created_at'].isoformat()
-            if incident['updated_at']:
-                incident['updated_at'] = incident['updated_at'].isoformat()
             
             # Get search areas
             cursor.execute("""
@@ -259,7 +257,7 @@ class IncidentManager:
             cursor.execute("""
                 SELECT id, division_id, division_name, assigned_team, team_leader,
                        priority, search_type, estimated_duration, status,
-                       created_at, updated_at,
+                       created_at,
                        ST_AsGeoJSON(geom) as geometry
                 FROM search_divisions 
                 WHERE incident_id = %s
@@ -273,8 +271,6 @@ class IncidentManager:
                     div_dict['geometry'] = json.loads(div_dict['geometry'])
                 if div_dict['created_at']:
                     div_dict['created_at'] = div_dict['created_at'].isoformat()
-                if div_dict['updated_at']:
-                    div_dict['updated_at'] = div_dict['updated_at'].isoformat()
                 divisions.append(div_dict)
             
             app.logger.info(f"Retrieved {len(divisions)} divisions for incident {incident_id}")
