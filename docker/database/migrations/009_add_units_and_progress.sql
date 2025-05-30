@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS unit_status_updates (
     comment TEXT,
     location_point GEOMETRY(POINT, 4326),
     location_source VARCHAR(50),
-    timestamp TIMESTAMP DEFAULT NOW(),
+    update_timestamp TIMESTAMP DEFAULT NOW(),
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
