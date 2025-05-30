@@ -1,3 +1,4 @@
-app/static/qr_codes
+logs/*
+static/qr_codes/*
 docker/geoserver_data
 docker/postgis_data

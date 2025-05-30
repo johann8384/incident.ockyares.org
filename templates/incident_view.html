@@ -1,0 +1,671 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <div>
+                <h1>Incident: <span id="incident-name">Loading...</span></h1>
+                <p class="text-muted mb-0">Incident ID: {{ incident_id }}</p>
+            </div>
+            <div>
+                <a href="/unit-checkin" class="btn btn-primary btn-lg">
+                    <i class="fas fa-map-marker-alt"></i> Check In
+                </a>
+            </div>
+        </div>
+        
+        <div class="alert alert-info" id="loading-alert">
+            <i class="fas fa-spinner fa-spin"></i> Loading incident data...
+        </div>
+        
+        <div class="alert alert-danger" id="error-alert" style="display: none;">
+            <i class="fas fa-exclamation-triangle"></i> <span id="error-message"></span>
+        </div>
+        
+        <div id="incident-content" style="display: none;">
+            <div class="row mb-3">
+                <div class="col-md-12">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Incident Details</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <p><strong>Type:</strong> <span id="incident-type"></span></p>
+                                    <p><strong>Incident Commander:</strong> <span id="incident-commander"></span></p>
+                                    <p><strong>Stage:</strong> 
+                                        <span id="incident-stage-display" class="badge badge-info"></span>
+                                        <button id="edit-stage-btn" class="btn btn-sm btn-outline-secondary ml-2" onclick="toggleStageEdit()">
+                                            <i class="fas fa-edit"></i> Edit
+                                        </button>
+                                    </p>
+                                    <div id="stage-edit-form" style="display: none;">
+                                        <div class="form-group">
+                                            <label for="stage-select">Change Stage:</label>
+                                            <select id="stage-select" class="form-control" style="width: 200px; display: inline-block;">
+                                                <option value="New">New</option>
+                                                <option value="Response">Response</option>
+                                                <option value="Recovery">Recovery</option>
+                                                <option value="Closed">Closed</option>
+                                            </select>
+                                            <button class="btn btn-sm btn-success ml-2" onclick="updateStage()">
+                                                <i class="fas fa-save"></i> Save
+                                            </button>
+                                            <button class="btn btn-sm btn-secondary ml-1" onclick="cancelStageEdit()">
+                                                <i class="fas fa-times"></i> Cancel
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <p><strong>Start Time:</strong> <span id="incident-start"></span></p>
+                                    <p><strong>Location:</strong> 
+                                        <span id="incident-location"></span>
+                                        <br><small class="text-muted" id="incident-coordinates"></small>
+                                    </p>
+                                    <p><strong>Description:</strong> <span id="incident-description"></span></p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Units <span class="badge badge-secondary" id="unit-count">0</span></h3>
+                        </div>
+                        <div class="card-body" id="units-container">
+                            <!-- Units will be loaded here -->
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Incident Map</h3>
+                        </div>
+                        <div class="card-body">
+                            <div id="incident-map" style="height: 400px;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="row mt-4">
+                <div class="col-md-12">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Division Status <span class="badge badge-secondary" id="division-count">0</span></h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="table-responsive">
+                                <table class="table table-striped" id="divisions-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Division</th>
+                                            <th>Assigned Team</th>
+                                            <th>Team Leader</th>
+                                            <th>Status</th>
+                                            <th>Priority</th>
+                                            <th>Estimated Duration</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="divisions-tbody">
+                                        <!-- Divisions will be loaded here -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let map;
+let incidentData = {};
+let unitMarkers = [];
+let currentStage = '';
+
+function showError(message) {
+    document.getElementById('loading-alert').style.display = 'none';
+    document.getElementById('error-alert').style.display = 'block';
+    document.getElementById('error-message').textContent = message;
+}
+
+function getStageClass(stage) {
+    switch(stage) {
+        case 'New': return 'badge-secondary';
+        case 'Response': return 'badge-warning';
+        case 'Recovery': return 'badge-info';
+        case 'Closed': return 'badge-success';
+        default: return 'badge-secondary';
+    }
+}
+
+function getUnitStatusClass(status) {
+    switch(status) {
+        case 'staging': return 'badge-secondary';
+        case 'assigned': return 'badge-warning';
+        case 'operating': return 'badge-primary';
+        case 'recovering': return 'badge-info';
+        case 'returned': return 'badge-success';
+        default: return 'badge-secondary';
+    }
+}
+
+function formatLocation(incident) {
+    // Display address if available, otherwise show coordinates
+    let locationText = '';
+    let coordinatesText = '';
+    
+    if (incident.address && incident.address.trim() !== '') {
+        locationText = incident.address;
+        coordinatesText = `Coordinates: ${incident.latitude.toFixed(6)}, ${incident.longitude.toFixed(6)}`;
+    } else {
+        locationText = `${incident.latitude.toFixed(6)}, ${incident.longitude.toFixed(6)}`;
+        coordinatesText = 'No address available';
+    }
+    
+    return { locationText, coordinatesText };
+}
+
+function toggleStageEdit() {
+    document.getElementById('incident-stage-display').style.display = 'none';
+    document.getElementById('edit-stage-btn').style.display = 'none';
+    document.getElementById('stage-edit-form').style.display = 'block';
+    document.getElementById('stage-select').value = currentStage;
+}
+
+function cancelStageEdit() {
+    document.getElementById('incident-stage-display').style.display = 'inline';
+    document.getElementById('edit-stage-btn').style.display = 'inline';
+    document.getElementById('stage-edit-form').style.display = 'none';
+}
+
+function updateStage() {
+    const newStage = document.getElementById('stage-select').value;
+    const incidentId = '{{ incident_id }}';
+    
+    if (newStage === currentStage) {
+        cancelStageEdit();
+        return;
+    }
+    
+    // Show loading state
+    const saveBtn = document.querySelector('#stage-edit-form .btn-success');
+    const originalText = saveBtn.innerHTML;
+    saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+    saveBtn.disabled = true;
+    
+    fetch(`/app/incident/${incidentId}/stage`, {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ stage: newStage })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            currentStage = newStage;
+            document.getElementById('incident-stage-display').textContent = newStage;
+            document.getElementById('incident-stage-display').className = `badge ${getStageClass(newStage)}`;
+            cancelStageEdit();
+            
+            // Show success message
+            showAlert('success', `Incident stage updated to ${newStage}`);
+        } else {
+            alert('Error updating stage: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(error => {
+        console.error('Error updating stage:', error);
+        alert('Network error updating stage');
+    })
+    .finally(() => {
+        // Restore button state
+        saveBtn.innerHTML = originalText;
+        saveBtn.disabled = false;
+    });
+}
+
+function updateUnitStatus(unitId, newStatus) {
+    const incidentId = '{{ incident_id }}';
+    
+    console.log('Updating unit status:', { incidentId, unitId, newStatus });
+    
+    // Show loading state
+    const statusElement = document.getElementById(`unit-${unitId}-status`);
+    const originalHTML = statusElement.innerHTML;
+    statusElement.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Updating...';
+    
+    fetch(`/app/incident/${incidentId}/unit/${unitId}/status`, {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ status: newStatus })
+    })
+    .then(response => {
+        console.log('Response status:', response.status);
+        return response.json();
+    })
+    .then(data => {
+        console.log('Response data:', data);
+        if (data.success) {
+            // Update the status display
+            statusElement.innerHTML = `<span class="badge ${getUnitStatusClass(newStatus)}">${newStatus}</span>`;
+            
+            // Hide the edit form
+            document.getElementById(`unit-${unitId}-edit-form`).style.display = 'none';
+            
+            // Show success message
+            showAlert('success', `Unit ${unitId} status updated to ${newStatus}`);
+            
+            // Refresh the data to ensure consistency
+            setTimeout(() => {
+                refreshIncidentData();
+            }, 1000);
+        } else {
+            statusElement.innerHTML = originalHTML;
+            alert('Error updating unit status: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(error => {
+        console.error('Error updating unit status:', error);
+        statusElement.innerHTML = originalHTML;
+        alert('Network error updating unit status: ' + error.message);
+    });
+}
+
+function toggleUnitStatusEdit(unitId, currentStatus) {
+    const editForm = document.getElementById(`unit-${unitId}-edit-form`);
+    const statusDisplay = document.getElementById(`unit-${unitId}-status`);
+    
+    if (editForm.style.display === 'none' || !editForm.style.display) {
+        // Show edit form
+        editForm.style.display = 'block';
+        statusDisplay.style.display = 'none';
+        
+        // Set current status in select
+        document.getElementById(`unit-${unitId}-status-select`).value = currentStatus;
+    } else {
+        // Hide edit form
+        editForm.style.display = 'none';
+        statusDisplay.style.display = 'inline';
+    }
+}
+
+function showAlert(type, message) {
+    const alertDiv = document.createElement('div');
+    alertDiv.className = `alert alert-${type} alert-dismissible fade show`;
+    alertDiv.innerHTML = `
+        <i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-triangle'}"></i> ${message}
+        <button type="button" class="close" data-dismiss="alert">
+            <span>&times;</span>
+        </button>
+    `;
+    document.querySelector('.card-body').insertBefore(alertDiv, document.querySelector('.card-body').firstChild);
+    
+    // Auto-dismiss after 3 seconds
+    setTimeout(() => {
+        alertDiv.remove();
+    }, 3000);
+}
+
+function showIncidentData(data) {
+    document.getElementById('loading-alert').style.display = 'none';
+    document.getElementById('incident-content').style.display = 'block';
+    
+    const incident = data.incident;
+    currentStage = incident.stage;
+    
+    // Update incident details
+    document.getElementById('incident-name').textContent = incident.incident_name;
+    document.getElementById('incident-type').textContent = incident.incident_type;
+    document.getElementById('incident-commander').textContent = incident.ic_name;
+    document.getElementById('incident-stage-display').textContent = incident.stage;
+    document.getElementById('incident-stage-display').className = `badge ${getStageClass(incident.stage)}`;
+    
+    // Format and display start time
+    const startTime = new Date(incident.start_time);
+    document.getElementById('incident-start').textContent = startTime.toLocaleString();
+    
+    // Display location with address if available
+    const locationInfo = formatLocation(incident);
+    document.getElementById('incident-location').textContent = locationInfo.locationText;
+    document.getElementById('incident-coordinates').textContent = locationInfo.coordinatesText;
+    
+    // Display description
+    document.getElementById('incident-description').textContent = incident.description || 'No description provided';
+    
+    // Update map
+    updateMap(incident, data.divisions, data.units);
+    
+    // Display units
+    displayUnits(data.units);
+    
+    // Display divisions table
+    displayDivisions(data.divisions);
+}
+
+function updateMap(incident, divisions, units) {
+    // Initialize map centered on incident location
+    map = L.map('incident-map').setView([incident.latitude, incident.longitude], 13);
+    
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+    
+    // Add incident center point marker
+    L.marker([incident.latitude, incident.longitude], {
+        icon: L.divIcon({
+            className: 'custom-div-icon',
+            html: '<div style="background-color: red; width: 20px; height: 20px; border-radius: 50%; border: 3px solid white; box-shadow: 0 0 5px rgba(0,0,0,0.5);"></div>',
+            iconSize: [20, 20],
+            iconAnchor: [10, 10]
+        })
+    })
+        .addTo(map)
+        .bindPopup(`<strong>${incident.incident_name}</strong><br/>Incident Command Post<br/>${incident.address || 'Location: ' + incident.latitude.toFixed(6) + ', ' + incident.longitude.toFixed(6)}`)
+        .openPopup();
+    
+    // Add search areas if available
+    if (incident.search_areas && incident.search_areas.length > 0) {
+        incident.search_areas.forEach(area => {
+            if (area.geometry && area.geometry.coordinates) {
+                const coords = area.geometry.coordinates[0].map(coord => [coord[1], coord[0]]);
+                L.polygon(coords, {
+                    color: area.area_type === 'hot_zone' ? 'red' : 'blue',
+                    fillOpacity: 0.2,
+                    weight: 3
+                }).addTo(map).bindPopup(`Search Area: ${area.area_name}`);
+            }
+        });
+    }
+    
+    // Add division polygons
+    if (divisions && divisions.length > 0) {
+        divisions.forEach(division => {
+            if (division.geometry && division.geometry.coordinates) {
+                const coords = division.geometry.coordinates[0].map(coord => [coord[1], coord[0]]);
+                const color = division.status === 'assigned' ? 'green' : 
+                             division.status === 'in_progress' ? 'orange' : 
+                             division.status === 'completed' ? 'blue' : 'gray';
+                
+                L.polygon(coords, {
+                    color: color,
+                    fillOpacity: 0.3,
+                    weight: 2
+                }).addTo(map).bindPopup(`
+                    <strong>${division.division_name}</strong><br/>
+                    Team: ${division.assigned_team || 'Unassigned'}<br/>
+                    Leader: ${division.team_leader || 'N/A'}<br/>
+                    Status: ${division.status}
+                `);
+            }
+        });
+    }
+    
+    // Add unit location markers
+    if (units && units.length > 0) {
+        units.forEach(unit => {
+            if (unit.latitude && unit.longitude) {
+                const marker = L.marker([unit.latitude, unit.longitude], {
+                    icon: L.divIcon({
+                        className: 'custom-div-icon',
+                        html: `<div style="background-color: blue; color: white; width: 24px; height: 24px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 5px rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold;">${unit.unit_id.slice(-2)}</div>`,
+                        iconSize: [24, 24],
+                        iconAnchor: [12, 12]
+                    })
+                }).addTo(map);
+                
+                marker.bindPopup(`
+                    <strong>Unit ${unit.unit_id}</strong><br/>
+                    Officer: ${unit.officer_name}<br/>
+                    Personnel: ${unit.personnel_count}<br/>
+                    Equipment: ${unit.equipment_status}<br/>
+                    Status: ${unit.unit_status}<br/>
+                    Check-in: ${unit.checkin_time ? new Date(unit.checkin_time).toLocaleString() : 'N/A'}
+                `);
+                
+                unitMarkers.push(marker);
+            }
+        });
+    }
+}
+
+function displayUnits(units) {
+    const container = document.getElementById('units-container');
+    const countBadge = document.getElementById('unit-count');
+    
+    if (!units || units.length === 0) {
+        container.innerHTML = '<p class="text-muted">No units have checked in yet.</p>';
+        countBadge.textContent = '0';
+        return;
+    }
+    
+    countBadge.textContent = units.length;
+    
+    let html = '<div class="list-group">';
+    
+    units.forEach(unit => {
+        // Handle null/undefined values safely
+        const unitId = unit.unit_id || 'Unknown';
+        const officerName = unit.officer_name || 'Unknown';
+        const personnelCount = unit.personnel_count || 0;
+        const equipmentStatus = unit.equipment_status || 'Unknown';
+        const unitStatus = unit.unit_status || 'staging';
+        const checkinTime = unit.checkin_time ? new Date(unit.checkin_time).toLocaleString() : 'N/A';
+        
+        const equipmentStatusBadge = equipmentStatus === 'Operational' ? 'badge-success' :
+                                   equipmentStatus === 'Limited' ? 'badge-warning' :
+                                   equipmentStatus === 'Non-operational' ? 'badge-danger' :
+                                   'badge-secondary';
+        
+        const unitStatusBadge = getUnitStatusClass(unitStatus);
+        
+        html += `
+            <div class="list-group-item">
+                <div class="d-flex w-100 justify-content-between">
+                    <h6 class="mb-1"><strong>Unit ${unitId}</strong></h6>
+                    <small class="text-muted">${checkinTime}</small>
+                </div>
+                <div class="mb-2">
+                    <strong>Officer:</strong> ${officerName}<br/>
+                    <strong>Personnel:</strong> ${personnelCount}<br/>
+                    <strong>Equipment:</strong> <span class="badge ${equipmentStatusBadge}">${equipmentStatus}</span><br/>
+                    <strong>Status:</strong> 
+                    <span id="unit-${unitId}-status" class="badge ${unitStatusBadge}">${unitStatus}</span>
+                    <button class="btn btn-sm btn-outline-secondary ml-2" onclick="toggleUnitStatusEdit('${unitId}', '${unitStatus}')">
+                        <i class="fas fa-edit"></i> Edit
+                    </button>
+                    
+                    <div id="unit-${unitId}-edit-form" style="display: none; margin-top: 10px;">
+                        <div class="form-group">
+                            <label>Change Status:</label>
+                            <select id="unit-${unitId}-status-select" class="form-control" style="width: 150px; display: inline-block;">
+                                <option value="staging">Staging</option>
+                                <option value="assigned">Assigned</option>
+                                <option value="operating">Operating</option>
+                                <option value="recovering">Recovering</option>
+                                <option value="returned">Returned</option>
+                            </select>
+                            <button class="btn btn-sm btn-success ml-2" onclick="updateUnitStatus('${unitId}', document.getElementById('unit-${unitId}-status-select').value)">
+                                <i class="fas fa-save"></i> Save
+                            </button>
+                            <button class="btn btn-sm btn-secondary ml-1" onclick="toggleUnitStatusEdit('${unitId}', '${unitStatus}')">
+                                <i class="fas fa-times"></i> Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="d-flex justify-content-between">
+                    <small class="text-muted">
+                        ${unit.latitude && unit.longitude ? 
+                            `Location: ${unit.latitude.toFixed(4)}, ${unit.longitude.toFixed(4)}` : 
+                            'No location data'}
+                        ${unit.assigned_division ? ` | Division: ${unit.assigned_division}` : ''}
+                    </small>
+                    <div>
+                        ${unit.photo_path ? 
+                            `<a href="${unit.photo_path}" target="_blank" class="btn btn-sm btn-outline-info me-2">View Photo</a>` : 
+                            ''}
+                        <a href="#" onclick="generateUnitQR('${unitId}', '${officerName}')" class="btn btn-sm btn-outline-primary">QR Code</a>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+function generateUnitQR(unitId, officerName) {
+    // This would generate a QR code for the specific unit
+    // For now, just show an alert
+    alert(`QR Code for Unit ${unitId} (${officerName}) would be generated here.`);
+}
+
+function displayDivisions(divisions) {
+    const tbody = document.getElementById('divisions-tbody');
+    const countBadge = document.getElementById('division-count');
+    
+    if (!divisions || divisions.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">No divisions created.</td></tr>';
+        countBadge.textContent = '0';
+        return;
+    }
+    
+    countBadge.textContent = divisions.length;
+    
+    let html = '';
+    
+    divisions.forEach(division => {
+        const statusBadge = division.status === 'assigned' ? 'badge-success' :
+                           division.status === 'in_progress' ? 'badge-warning' :
+                           division.status === 'completed' ? 'badge-primary' :
+                           'badge-secondary';
+        
+        html += `
+            <tr>
+                <td><strong>${division.division_name}</strong><br/><small class="text-muted">${division.division_id}</small></td>
+                <td>${division.assigned_team || '<em>Unassigned</em>'}</td>
+                <td>${division.team_leader || '<em>N/A</em>'}</td>
+                <td><span class="badge ${statusBadge}">${division.status}</span></td>
+                <td>${division.priority}</td>
+                <td>${division.estimated_duration || 'N/A'}</td>
+            </tr>
+        `;
+    });
+    
+    tbody.innerHTML = html;
+}
+
+function formatDateTime(dateString) {
+    if (!dateString) return 'N/A';
+    return new Date(dateString).toLocaleString();
+}
+
+// Auto-refresh incident data every 30 seconds
+function refreshIncidentData() {
+    const incidentId = '{{ incident_id }}';
+    
+    fetch(`/app/incident/${incidentId}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                incidentData = data;
+                
+                // Update current stage if it changed
+                if (data.incident.stage !== currentStage) {
+                    currentStage = data.incident.stage;
+                    document.getElementById('incident-stage-display').textContent = currentStage;
+                    document.getElementById('incident-stage-display').className = `badge ${getStageClass(currentStage)}`;
+                }
+                
+                // Update location display if address changed
+                const locationInfo = formatLocation(data.incident);
+                document.getElementById('incident-location').textContent = locationInfo.locationText;
+                document.getElementById('incident-coordinates').textContent = locationInfo.coordinatesText;
+                
+                // Update unit markers without reinitializing the map
+                if (map) {
+                    // Clear existing unit markers
+                    unitMarkers.forEach(marker => map.removeLayer(marker));
+                    unitMarkers = [];
+                    
+                    // Add new unit markers
+                    if (data.units && data.units.length > 0) {
+                        data.units.forEach(unit => {
+                            if (unit.latitude && unit.longitude) {
+                                const marker = L.marker([unit.latitude, unit.longitude], {
+                                    icon: L.divIcon({
+                                        className: 'custom-div-icon',
+                                        html: `<div style="background-color: blue; color: white; width: 24px; height: 24px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 5px rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold;">${unit.unit_id.slice(-2)}</div>`,
+                                        iconSize: [24, 24],
+                                        iconAnchor: [12, 12]
+                                    })
+                                }).addTo(map);
+                                
+                                marker.bindPopup(`
+                                    <strong>Unit ${unit.unit_id}</strong><br/>
+                                    Officer: ${unit.officer_name}<br/>
+                                    Personnel: ${unit.personnel_count}<br/>
+                                    Equipment: ${unit.equipment_status}<br/>
+                                    Status: ${unit.unit_status}<br/>
+                                    Check-in: ${unit.checkin_time ? new Date(unit.checkin_time).toLocaleString() : 'N/A'}
+                                `);
+                                
+                                unitMarkers.push(marker);
+                            }
+                        });
+                    }
+                }
+                
+                // Update displays
+                displayUnits(data.units);
+                displayDivisions(data.divisions);
+            }
+        })
+        .catch(error => {
+            console.error('Error refreshing incident data:', error);
+        });
+}
+
+// Load incident data when page loads
+document.addEventListener('DOMContentLoaded', function() {
+    const incidentId = '{{ incident_id }}';
+    
+    fetch(`/app/incident/${incidentId}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                incidentData = data;
+                showIncidentData(data);
+                
+                // Start auto-refresh every 30 seconds
+                setInterval(refreshIncidentData, 30000);
+            } else {
+                showError(data.error || 'Failed to load incident data');
+            }
+        })
+        .catch(error => {
+            console.error('Error loading incident data:', error);
+            showError('Network error while loading incident data');
+        });
+});
+</script>
+{% endblock %}
