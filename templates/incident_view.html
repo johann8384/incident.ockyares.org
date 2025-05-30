@@ -35,7 +35,29 @@
                                 <div class="col-md-6">
                                     <p><strong>Type:</strong> <span id="incident-type"></span></p>
                                     <p><strong>Incident Commander:</strong> <span id="incident-commander"></span></p>
-                                    <p><strong>Status:</strong> <span id="incident-status" class="badge badge-info"></span></p>
+                                    <p><strong>Stage:</strong> 
+                                        <span id="incident-stage-display" class="badge badge-info"></span>
+                                        <button id="edit-stage-btn" class="btn btn-sm btn-outline-secondary ml-2" onclick="toggleStageEdit()">
+                                            <i class="fas fa-edit"></i> Edit
+                                        </button>
+                                    </p>
+                                    <div id="stage-edit-form" style="display: none;">
+                                        <div class="form-group">
+                                            <label for="stage-select">Change Stage:</label>
+                                            <select id="stage-select" class="form-control" style="width: 200px; display: inline-block;">
+                                                <option value="New">New</option>
+                                                <option value="Response">Response</option>
+                                                <option value="Recovery">Recovery</option>
+                                                <option value="Closed">Closed</option>
+                                            </select>
+                                            <button class="btn btn-sm btn-success ml-2" onclick="updateStage()">
+                                                <i class="fas fa-save"></i> Save
+                                            </button>
+                                            <button class="btn btn-sm btn-secondary ml-1" onclick="cancelStageEdit()">
+                                                <i class="fas fa-times"></i> Cancel
+                                            </button>
+                                        </div>
+                                    </div>
                                 </div>
                                 <div class="col-md-6">
                                     <p><strong>Start Time:</strong> <span id="incident-start"></span></p>
@@ -110,6 +132,7 @@
 let map;
 let incidentData = {};
 let unitMarkers = [];
+let currentStage = '';
 
 function showError(message) {
     document.getElementById('loading-alert').style.display = 'none';
@@ -117,18 +140,102 @@ function showError(message) {
     document.getElementById('error-message').textContent = message;
 }
 
+function getStageClass(stage) {
+    switch(stage) {
+        case 'New': return 'badge-secondary';
+        case 'Response': return 'badge-warning';
+        case 'Recovery': return 'badge-info';
+        case 'Closed': return 'badge-success';
+        default: return 'badge-secondary';
+    }
+}
+
+function toggleStageEdit() {
+    document.getElementById('incident-stage-display').style.display = 'none';
+    document.getElementById('edit-stage-btn').style.display = 'none';
+    document.getElementById('stage-edit-form').style.display = 'block';
+    document.getElementById('stage-select').value = currentStage;
+}
+
+function cancelStageEdit() {
+    document.getElementById('incident-stage-display').style.display = 'inline';
+    document.getElementById('edit-stage-btn').style.display = 'inline';
+    document.getElementById('stage-edit-form').style.display = 'none';
+}
+
+function updateStage() {
+    const newStage = document.getElementById('stage-select').value;
+    const incidentId = '{{ incident_id }}';
+    
+    if (newStage === currentStage) {
+        cancelStageEdit();
+        return;
+    }
+    
+    // Show loading state
+    const saveBtn = document.querySelector('#stage-edit-form .btn-success');
+    const originalText = saveBtn.innerHTML;
+    saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+    saveBtn.disabled = true;
+    
+    fetch(`/api/incident/${incidentId}/stage`, {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ stage: newStage })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            currentStage = newStage;
+            document.getElementById('incident-stage-display').textContent = newStage;
+            document.getElementById('incident-stage-display').className = `badge ${getStageClass(newStage)}`;
+            cancelStageEdit();
+            
+            // Show success message
+            const alertDiv = document.createElement('div');
+            alertDiv.className = 'alert alert-success alert-dismissible fade show';
+            alertDiv.innerHTML = `
+                <i class="fas fa-check-circle"></i> Incident stage updated to ${newStage}
+                <button type="button" class="close" data-dismiss="alert">
+                    <span>&times;</span>
+                </button>
+            `;
+            document.querySelector('.card-body').insertBefore(alertDiv, document.querySelector('.card-body').firstChild);
+            
+            // Auto-dismiss after 3 seconds
+            setTimeout(() => {
+                alertDiv.remove();
+            }, 3000);
+        } else {
+            alert('Error updating stage: ' + data.error);
+        }
+    })
+    .catch(error => {
+        console.error('Error updating stage:', error);
+        alert('Network error updating stage');
+    })
+    .finally(() => {
+        // Restore button state
+        saveBtn.innerHTML = originalText;
+        saveBtn.disabled = false;
+    });
+}
+
 function showIncidentData(data) {
     document.getElementById('loading-alert').style.display = 'none';
     document.getElementById('incident-content').style.display = 'block';
     
     const incident = data.incident;
+    currentStage = incident.stage;
     
     // Update incident details
     document.getElementById('incident-name').textContent = incident.incident_name;
     document.getElementById('incident-type').textContent = incident.incident_type;
     document.getElementById('incident-commander').textContent = incident.ic_name;
-    document.getElementById('incident-status').textContent = incident.status;
-    document.getElementById('incident-status').className = `badge badge-${incident.status === 'active' ? 'success' : 'secondary'}`;
+    document.getElementById('incident-stage-display').textContent = incident.stage;
+    document.getElementById('incident-stage-display').className = `badge ${getStageClass(incident.stage)}`;
     
     // Format and display start time
     const startTime = new Date(incident.start_time);
@@ -257,9 +364,6 @@ function displayUnitCheckins(unitCheckins) {
         
         const checkinTime = new Date(unit.checkin_time).toLocaleString();
         
-        // Generate a simple QR code link for the unit
-        const qrLink = `/api/unit-qr/${unit.unit_id}`;
-        
         html += `
             <div class="list-group-item">
                 <div class="d-flex w-100 justify-content-between">
@@ -347,6 +451,13 @@ function refreshIncidentData() {
         .then(data => {
             if (data.success) {
                 incidentData = data;
+                
+                // Update current stage if it changed
+                if (data.incident.stage !== currentStage) {
+                    currentStage = data.incident.stage;
+                    document.getElementById('incident-stage-display').textContent = currentStage;
+                    document.getElementById('incident-stage-display').className = `badge ${getStageClass(currentStage)}`;
+                }
                 
                 // Update unit check-ins and map markers without reinitializing the map
                 if (map) {
