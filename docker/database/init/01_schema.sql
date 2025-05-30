@@ -29,7 +29,8 @@ CREATE TABLE search_areas (
     area_type VARCHAR(50) NOT NULL,
     priority INTEGER DEFAULT 1,
     geom GEOMETRY(POLYGON, 4326),
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
 );
 
 -- Search divisions table
@@ -60,7 +61,9 @@ CREATE TABLE search_progress (
     photo_path TEXT,
     timestamp TIMESTAMP DEFAULT NOW(),
     status VARCHAR(50),
-    geom GEOMETRY(POINT, 4326)
+    geom GEOMETRY(POINT, 4326),
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
 );
 
 -- Unit check-ins table
@@ -107,7 +110,13 @@ $$ language 'plpgsql';
 CREATE TRIGGER update_incidents_updated_at BEFORE UPDATE ON incidents
     FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
 
+CREATE TRIGGER update_search_areas_updated_at BEFORE UPDATE ON search_areas
+    FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
+
 CREATE TRIGGER update_search_divisions_updated_at BEFORE UPDATE ON search_divisions
+    FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
+
+CREATE TRIGGER update_search_progress_updated_at BEFORE UPDATE ON search_progress
     FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
 
 CREATE TRIGGER update_unit_checkins_updated_at BEFORE UPDATE ON unit_checkins
