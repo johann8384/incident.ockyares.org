@@ -1,3 +1,525 @@
+from flask import Flask, render_template, request, jsonify, send_file
+import psycopg2
+import psycopg2.extras
+import json
+import qrcode
+from datetime import datetime
+import os
+import uuid
+from shapely.geometry import Polygon, Point
+from shapely import wkt
+import geopandas as gpd
+from io import BytesIO
+import base64
+import logging
+from logging.handlers import RotatingFileHandler
+import requests
+
+app = Flask(__name__)
+
+# Configure logging
+if not app.debug:
+    if not os.path.exists('logs'):
+        os.mkdir('logs')
+    file_handler = RotatingFileHandler('logs/incident_app.log', maxBytes=10240, backupCount=10)
+    file_handler.setFormatter(logging.Formatter(
+        '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
+    ))
+    file_handler.setLevel(logging.INFO)
+    app.logger.addHandler(file_handler)
+    app.logger.setLevel(logging.INFO)
+    app.logger.info('Incident Management System startup')
+
+# Database configuration from environment variables
+DB_CONFIG = {
+    'host': os.getenv('DB_HOST', 'postgis'),
+    'port': os.getenv('DB_PORT', '5432'),
+    'database': os.getenv('DB_NAME', 'emergency_ops'),
+    'user': os.getenv('DB_USER', 'postgres'),
+    'password': os.getenv('DB_PASSWORD', 'emergency_password')
+}
+
+def reverse_geocode(lat, lng):
+    """Reverse geocode coordinates to address using Nominatim"""
+    try:
+        url = f"https://nominatim.openstreetmap.org/reverse"
+        params = {
+            'lat': lat,
+            'lon': lng,
+            'format': 'json',
+            'addressdetails': 1
+        }
+        headers = {
+            'User-Agent': 'Emergency-Incident-Management/1.0'
+        }
+        
+        response = requests.get(url, params=params, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        if 'display_name' in data:
+            return {
+                'success': True,
+                'address': data['display_name'],
+                'formatted': data.get('address', {})
+            }
+        else:
+            return {
+                'success': False,
+                'error': 'Address not found'
+            }
+            
+    except requests.RequestException as e:
+        app.logger.error(f"Geocoding API error: {e}")
+        return {
+            'success': False,
+            'error': f'Geocoding service error: {str(e)}'
+        }
+    except Exception as e:
+        app.logger.error(f"Unexpected geocoding error: {e}")
+        return {
+            'success': False,
+            'error': f'Unexpected error: {str(e)}'
+        }
+
+class IncidentManager:
+    def __init__(self):
+        self.conn = None
+        self.db_config = DB_CONFIG
+        
+    def connect_db(self):
+        try:
+            self.conn = psycopg2.connect(**self.db_config)
+            return self.conn
+        except Exception as e:
+            app.logger.error(f"Database connection failed: {e}")
+            raise
+    
+    def close_db(self):
+        if self.conn:
+            self.conn.close()
+    
+    def test_connection(self):
+        """Test database connection for health checks"""
+        try:
+            conn = self.connect_db()
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1")
+            result = cursor.fetchone()
+            cursor.close()
+            self.close_db()
+            return result is not None
+        except Exception as e:
+            app.logger.error(f"Database health check failed: {e}")
+            return False
+    
+    def get_active_incidents(self):
+        """Get list of active incidents"""
+        conn = self.connect_db()
+        cursor = conn.cursor(psycopg2.extras.RealDictCursor)
+        
+        try:
+            cursor.execute("""
+                SELECT 
+                    incident_id, incident_name, incident_type, ic_name,
+                    start_time, stage, description, address,
+                    ST_X(center_point) as longitude,
+                    ST_Y(center_point) as latitude
+                FROM incidents 
+                WHERE stage != 'Closed'
+                ORDER BY start_time DESC
+            """)
+            
+            incidents = cursor.fetchall()
+            return [dict(incident) for incident in incidents]
+            
+        finally:
+            cursor.close()
+            self.close_db()
+    
+    def get_incident_details(self, incident_id):
+        """Get detailed incident information"""
+        conn = self.connect_db()
+        cursor = conn.cursor(psycopg2.extras.RealDictCursor)
+        
+        try:
+            cursor.execute("""
+                SELECT 
+                    incident_id, incident_name, incident_type, ic_name,
+                    start_time, stage, description, address,
+                    ST_X(center_point) as longitude,
+                    ST_Y(center_point) as latitude
+                FROM incidents 
+                WHERE incident_id = %s
+            """, (incident_id,))
+            
+            incident = cursor.fetchone()
+            return dict(incident) if incident else None
+            
+        finally:
+            cursor.close()
+            self.close_db()
+    
+    def get_incident_divisions(self, incident_id):
+        """Get all divisions for an incident"""
+        conn = self.connect_db()
+        cursor = conn.cursor(psycopg2.extras.RealDictCursor)
+        
+        try:
+            cursor.execute("""
+                SELECT 
+                    id, division_id, division_name, assigned_team, team_leader,
+                    priority, search_type, estimated_duration, status,
+                    ST_AsGeoJSON(geom) as geometry
+                FROM search_divisions 
+                WHERE incident_id = %s
+                ORDER BY division_id
+            """, (incident_id,))
+            
+            divisions = cursor.fetchall()
+            return [dict(division) for division in divisions]
+            
+        finally:
+            cursor.close()
+            self.close_db()
+    
+    def get_incident_units(self, incident_id):
+        """Get all units with latest status for an incident"""
+        conn = self.connect_db()
+        cursor = conn.cursor(psycopg2.extras.RealDictCursor)
+        
+        try:
+            cursor.execute("""
+                WITH latest_updates AS (
+                    SELECT 
+                        unit_id,
+                        status_change,
+                        progress_percent,
+                        need_assistance,
+                        comments,
+                        update_time,
+                        ST_X(location) as longitude,
+                        ST_Y(location) as latitude,
+                        ROW_NUMBER() OVER (PARTITION BY unit_id ORDER BY update_time DESC) as rn
+                    FROM unit_status_updates 
+                    WHERE incident_id = %s
+                ),
+                latest_checkins AS (
+                    SELECT 
+                        unit_id,
+                        officer_name,
+                        personnel_count,
+                        equipment_status,
+                        checkin_time,
+                        assigned_division,
+                        ROW_NUMBER() OVER (PARTITION BY unit_id ORDER BY checkin_time DESC) as rn
+                    FROM unit_checkins 
+                    WHERE incident_id = %s
+                )
+                SELECT 
+                    COALESCE(c.unit_id, u.unit_id) as unit_id,
+                    c.officer_name,
+                    c.personnel_count,
+                    c.equipment_status,
+                    c.checkin_time,
+                    c.assigned_division,
+                    u.status_change,
+                    u.progress_percent,
+                    u.need_assistance,
+                    u.comments,
+                    u.update_time,
+                    u.longitude,
+                    u.latitude
+                FROM latest_checkins c
+                FULL OUTER JOIN latest_updates u ON c.unit_id = u.unit_id
+                WHERE (c.rn = 1 OR c.rn IS NULL) AND (u.rn = 1 OR u.rn IS NULL)
+                ORDER BY COALESCE(c.checkin_time, u.update_time) DESC
+            """, (incident_id, incident_id))
+            
+            units = cursor.fetchall()
+            return [dict(unit) for unit in units]
+            
+        finally:
+            cursor.close()
+            self.close_db()
+    
+    def get_incident_unit_checkins(self, incident_id):
+        """Get unit check-ins for an incident"""
+        conn = self.connect_db()
+        cursor = conn.cursor(psycopg2.extras.RealDictCursor)
+        
+        try:
+            cursor.execute("""
+                SELECT 
+                    id, unit_id, officer_name, personnel_count, equipment_status,
+                    checkin_time, assigned_division, photo_path,
+                    ST_X(checkin_location) as longitude,
+                    ST_Y(checkin_location) as latitude
+                FROM unit_checkins 
+                WHERE incident_id = %s
+                ORDER BY checkin_time DESC
+            """, (incident_id,))
+            
+            checkins = cursor.fetchall()
+            return [dict(checkin) for checkin in checkins]
+            
+        finally:
+            cursor.close()
+            self.close_db()
+    
+    def submit_unit_checkin(self, checkin_data):
+        """Submit unit check-in"""
+        conn = self.connect_db()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                INSERT INTO unit_checkins (
+                    incident_id, unit_id, officer_name, personnel_count,
+                    equipment_status, checkin_time, photo_path, checkin_location
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326))
+                RETURNING id
+            """, (
+                checkin_data['incident_id'],
+                checkin_data['unit_id'],
+                checkin_data['officer_name'],
+                int(checkin_data['personnel_count']),
+                checkin_data['equipment_status'],
+                datetime.now(),
+                checkin_data.get('photo_path'),
+                float(checkin_data.get('longitude', 0)) if checkin_data.get('longitude') else None,
+                float(checkin_data.get('latitude', 0)) if checkin_data.get('latitude') else None
+            ))
+            
+            checkin_id = cursor.fetchone()[0]
+            conn.commit()
+            app.logger.info(f"Unit {checkin_data['unit_id']} checked in for incident {checkin_data['incident_id']}")
+            return checkin_id
+            
+        except Exception as e:
+            conn.rollback()
+            app.logger.error(f"Failed to submit unit check-in: {e}")
+            raise e
+        finally:
+            cursor.close()
+            self.close_db()
+    
+    def get_available_assignment(self, incident_id):
+        """Get next available unassigned division"""
+        conn = self.connect_db()
+        cursor = conn.cursor(psycopg2.extras.RealDictCursor)
+        
+        try:
+            cursor.execute("""
+                SELECT 
+                    id, division_id, division_name,
+                    ST_AsGeoJSON(geom) as geometry
+                FROM search_divisions 
+                WHERE incident_id = %s AND status = 'unassigned'
+                ORDER BY priority, division_id
+                LIMIT 1
+            """, (incident_id,))
+            
+            assignment = cursor.fetchone()
+            return dict(assignment) if assignment else None
+            
+        finally:
+            cursor.close()
+            self.close_db()
+    
+    def assign_unit_to_division(self, incident_id, unit_id, division_id, officer_name):
+        """Assign unit to division"""
+        conn = self.connect_db()
+        cursor = conn.cursor()
+        
+        try:
+            # Update division with assignment
+            cursor.execute("""
+                UPDATE search_divisions 
+                SET assigned_team = %s, team_leader = %s, status = 'assigned'
+                WHERE incident_id = %s AND division_id = %s
+            """, (unit_id, officer_name, incident_id, division_id))
+            
+            # Update unit checkin with assignment
+            cursor.execute("""
+                UPDATE unit_checkins 
+                SET assigned_division = %s
+                WHERE incident_id = %s AND unit_id = %s 
+                  AND checkin_time = (
+                      SELECT MAX(checkin_time) FROM unit_checkins 
+                      WHERE incident_id = %s AND unit_id = %s
+                  )
+            """, (division_id, incident_id, unit_id, incident_id, unit_id))
+            
+            conn.commit()
+            app.logger.info(f"Assigned unit {unit_id} to division {division_id} for incident {incident_id}")
+            
+        except Exception as e:
+            conn.rollback()
+            app.logger.error(f"Failed to assign unit to division: {e}")
+            raise e
+        finally:
+            cursor.close()
+            self.close_db()
+    
+    def update_incident_stage(self, incident_id, new_stage):
+        """Update incident stage"""
+        valid_stages = ['New', 'Planning', 'Active', 'Transitioning', 'Closed']
+        
+        if new_stage not in valid_stages:
+            raise ValueError(f"Invalid stage. Must be one of: {', '.join(valid_stages)}")
+        
+        conn = self.connect_db()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                UPDATE incidents 
+                SET stage = %s, 
+                    end_time = CASE WHEN %s = 'Closed' THEN NOW() ELSE end_time END
+                WHERE incident_id = %s
+            """, (new_stage, new_stage, incident_id))
+            
+            if cursor.rowcount == 0:
+                raise ValueError(f"Incident {incident_id} not found")
+            
+            conn.commit()
+            app.logger.info(f"Updated incident {incident_id} stage to {new_stage}")
+            
+        except Exception as e:
+            conn.rollback()
+            app.logger.error(f"Failed to update incident stage: {e}")
+            raise e
+        finally:
+            cursor.close()
+            self.close_db()
+    
+    def update_unit_status(self, incident_id, unit_id, new_status):
+        """Update unit status"""
+        valid_statuses = ['Available', 'En Route', 'On Scene', 'Searching', 'Standby', 'Off Duty']
+        
+        if new_status not in valid_statuses:
+            raise ValueError(f"Invalid status. Must be one of: {', '.join(valid_statuses)}")
+        
+        conn = self.connect_db()
+        cursor = conn.cursor()
+        
+        try:
+            # For now, we'll update the search_divisions table if unit is assigned
+            cursor.execute("""
+                UPDATE search_divisions 
+                SET status = %s
+                WHERE incident_id = %s AND assigned_team = %s
+            """, (new_status.lower().replace(' ', '_'), incident_id, unit_id))
+            
+            conn.commit()
+            app.logger.info(f"Updated unit {unit_id} status to {new_status} for incident {incident_id}")
+            
+        except Exception as e:
+            conn.rollback()
+            app.logger.error(f"Failed to update unit status: {e}")
+            raise e
+        finally:
+            cursor.close()
+            self.close_db()
+    
+    def submit_unit_status_update(self, update_data):
+        """Submit unit status update"""
+        conn = self.connect_db()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                INSERT INTO unit_status_updates (
+                    incident_id, unit_id, officer_name, status_change,
+                    progress_percent, need_assistance, comments,
+                    update_time, location
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326))
+                RETURNING id
+            """, (
+                update_data['incident_id'],
+                update_data['unit_id'],
+                update_data['officer_name'],
+                update_data['status_change'],
+                update_data.get('progress_percent'),
+                update_data.get('need_assistance', False),
+                update_data.get('comments', ''),
+                datetime.now(),
+                float(update_data.get('longitude', 0)) if update_data.get('longitude') else None,
+                float(update_data.get('latitude', 0)) if update_data.get('latitude') else None
+            ))
+            
+            update_id = cursor.fetchone()[0]
+            conn.commit()
+            app.logger.info(f"Unit {update_data['unit_id']} submitted status update for incident {update_data['incident_id']}")
+            return update_id
+            
+        except Exception as e:
+            conn.rollback()
+            app.logger.error(f"Failed to submit unit status update: {e}")
+            raise e
+        finally:
+            cursor.close()
+            self.close_db()
+    
+    def get_unit_status_updates(self, incident_id, unit_id=None):
+        """Get unit status updates for incident or specific unit"""
+        conn = self.connect_db()
+        cursor = conn.cursor(psycopg2.extras.RealDictCursor)
+        
+        try:
+            if unit_id:
+                cursor.execute("""
+                    SELECT 
+                        id, unit_id, officer_name, status_change,
+                        progress_percent, need_assistance, comments,
+                        update_time,
+                        ST_X(location) as longitude,
+                        ST_Y(location) as latitude
+                    FROM unit_status_updates 
+                    WHERE incident_id = %s AND unit_id = %s
+                    ORDER BY update_time DESC
+                """, (incident_id, unit_id))
+            else:
+                cursor.execute("""
+                    SELECT 
+                        id, unit_id, officer_name, status_change,
+                        progress_percent, need_assistance, comments,
+                        update_time,
+                        ST_X(location) as longitude,
+                        ST_Y(location) as latitude
+                    FROM unit_status_updates 
+                    WHERE incident_id = %s
+                    ORDER BY update_time DESC
+                """, (incident_id,))
+            
+            updates = cursor.fetchall()
+            return [dict(update) for update in updates]
+            
+        finally:
+            cursor.close()
+            self.close_db()
+    
+    def get_incident_qr_codes(self, incident_id):
+        """Get or generate QR codes for incident teams"""
+        conn = self.connect_db()
+        cursor = conn.cursor(psycopg2.extras.RealDictCursor)
+        
+        try:
+            # Get teams from assigned divisions
+            cursor.execute("""
+                SELECT DISTINCT assigned_team, team_leader
+                FROM search_divisions 
+                WHERE incident_id = %s AND assigned_team IS NOT NULL
+            """, (incident_id,))
+            
+            assigned_teams = cursor.fetchall()
+            teams = {}
+            
+            # Convert to team structure
+            for division in assigned_teams:
+                if division['assigned_team']:
                     team_id = division['assigned_team'].lower().replace(' ', '_')
                     if team_id not in teams:
                         teams[team_id] = {
@@ -73,6 +595,9 @@
         except Exception as e:
             app.logger.error(f"Failed to get incident QR codes: {e}")
             raise e
+        finally:
+            cursor.close()
+            self.close_db()
     
     def create_incident(self, incident_data):
         """Create new incident record with geocoded address"""
