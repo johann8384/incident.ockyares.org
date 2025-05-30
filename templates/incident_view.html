@@ -74,10 +74,10 @@
                 <div class="col-md-6">
                     <div class="card">
                         <div class="card-header">
-                            <h3>Checked-in Units <span class="badge badge-secondary" id="unit-count">0</span></h3>
+                            <h3>Units <span class="badge badge-secondary" id="unit-count">0</span></h3>
                         </div>
-                        <div class="card-body" id="unit-checkins-container">
-                            <!-- Unit check-ins will be loaded here -->
+                        <div class="card-body" id="units-container">
+                            <!-- Units will be loaded here -->
                         </div>
                     </div>
                 </div>
@@ -150,6 +150,17 @@ function getStageClass(stage) {
     }
 }
 
+function getUnitStatusClass(status) {
+    switch(status) {
+        case 'staging': return 'badge-secondary';
+        case 'assigned': return 'badge-warning';
+        case 'operating': return 'badge-primary';
+        case 'recovering': return 'badge-info';
+        case 'returned': return 'badge-success';
+        default: return 'badge-secondary';
+    }
+}
+
 function toggleStageEdit() {
     document.getElementById('incident-stage-display').style.display = 'none';
     document.getElementById('edit-stage-btn').style.display = 'none';
@@ -194,20 +205,7 @@ function updateStage() {
             cancelStageEdit();
             
             // Show success message
-            const alertDiv = document.createElement('div');
-            alertDiv.className = 'alert alert-success alert-dismissible fade show';
-            alertDiv.innerHTML = `
-                <i class="fas fa-check-circle"></i> Incident stage updated to ${newStage}
-                <button type="button" class="close" data-dismiss="alert">
-                    <span>&times;</span>
-                </button>
-            `;
-            document.querySelector('.card-body').insertBefore(alertDiv, document.querySelector('.card-body').firstChild);
-            
-            // Auto-dismiss after 3 seconds
-            setTimeout(() => {
-                alertDiv.remove();
-            }, 3000);
+            showAlert('success', `Incident stage updated to ${newStage}`);
         } else {
             alert('Error updating stage: ' + data.error);
         }
@@ -221,6 +219,84 @@ function updateStage() {
         saveBtn.innerHTML = originalText;
         saveBtn.disabled = false;
     });
+}
+
+function updateUnitStatus(unitId, newStatus) {
+    const incidentId = '{{ incident_id }}';
+    
+    // Show loading state
+    const statusElement = document.getElementById(`unit-${unitId}-status`);
+    const originalHTML = statusElement.innerHTML;
+    statusElement.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Updating...';
+    
+    fetch(`/api/incident/${incidentId}/unit/${unitId}/status`, {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ status: newStatus })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Update the status display
+            statusElement.innerHTML = `<span class="badge ${getUnitStatusClass(newStatus)}">${newStatus}</span>`;
+            
+            // Hide the edit form
+            document.getElementById(`unit-${unitId}-edit-form`).style.display = 'none';
+            
+            // Show success message
+            showAlert('success', `Unit ${unitId} status updated to ${newStatus}`);
+            
+            // Refresh the data to ensure consistency
+            setTimeout(() => {
+                refreshIncidentData();
+            }, 1000);
+        } else {
+            statusElement.innerHTML = originalHTML;
+            alert('Error updating unit status: ' + data.error);
+        }
+    })
+    .catch(error => {
+        console.error('Error updating unit status:', error);
+        statusElement.innerHTML = originalHTML;
+        alert('Network error updating unit status');
+    });
+}
+
+function toggleUnitStatusEdit(unitId, currentStatus) {
+    const editForm = document.getElementById(`unit-${unitId}-edit-form`);
+    const statusDisplay = document.getElementById(`unit-${unitId}-status`);
+    
+    if (editForm.style.display === 'none' || !editForm.style.display) {
+        // Show edit form
+        editForm.style.display = 'block';
+        statusDisplay.style.display = 'none';
+        
+        // Set current status in select
+        document.getElementById(`unit-${unitId}-status-select`).value = currentStatus;
+    } else {
+        // Hide edit form
+        editForm.style.display = 'none';
+        statusDisplay.style.display = 'inline';
+    }
+}
+
+function showAlert(type, message) {
+    const alertDiv = document.createElement('div');
+    alertDiv.className = `alert alert-${type} alert-dismissible fade show`;
+    alertDiv.innerHTML = `
+        <i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-triangle'}"></i> ${message}
+        <button type="button" class="close" data-dismiss="alert">
+            <span>&times;</span>
+        </button>
+    `;
+    document.querySelector('.card-body').insertBefore(alertDiv, document.querySelector('.card-body').firstChild);
+    
+    // Auto-dismiss after 3 seconds
+    setTimeout(() => {
+        alertDiv.remove();
+    }, 3000);
 }
 
 function showIncidentData(data) {
@@ -248,16 +324,16 @@ function showIncidentData(data) {
     document.getElementById('incident-description').textContent = incident.description || 'No description provided';
     
     // Update map
-    updateMap(incident, data.divisions, data.unit_checkins);
+    updateMap(incident, data.divisions, data.units);
     
-    // Display unit check-ins
-    displayUnitCheckins(data.unit_checkins);
+    // Display units
+    displayUnits(data.units);
     
     // Display divisions table
     displayDivisions(data.divisions);
 }
 
-function updateMap(incident, divisions, unitCheckins) {
+function updateMap(incident, divisions, units) {
     // Initialize map centered on incident location
     map = L.map('incident-map').setView([incident.latitude, incident.longitude], 13);
     
@@ -316,8 +392,8 @@ function updateMap(incident, divisions, unitCheckins) {
     }
     
     // Add unit location markers
-    if (unitCheckins && unitCheckins.length > 0) {
-        unitCheckins.forEach(unit => {
+    if (units && units.length > 0) {
+        units.forEach(unit => {
             if (unit.latitude && unit.longitude) {
                 const marker = L.marker([unit.latitude, unit.longitude], {
                     icon: L.divIcon({
@@ -333,7 +409,8 @@ function updateMap(incident, divisions, unitCheckins) {
                     Officer: ${unit.officer_name}<br/>
                     Personnel: ${unit.personnel_count}<br/>
                     Equipment: ${unit.equipment_status}<br/>
-                    Check-in: ${new Date(unit.checkin_time).toLocaleString()}
+                    Status: ${unit.unit_status}<br/>
+                    Check-in: ${unit.checkin_time ? new Date(unit.checkin_time).toLocaleString() : 'N/A'}
                 `);
                 
                 unitMarkers.push(marker);
@@ -342,27 +419,28 @@ function updateMap(incident, divisions, unitCheckins) {
     }
 }
 
-function displayUnitCheckins(unitCheckins) {
-    const container = document.getElementById('unit-checkins-container');
+function displayUnits(units) {
+    const container = document.getElementById('units-container');
     const countBadge = document.getElementById('unit-count');
     
-    if (!unitCheckins || unitCheckins.length === 0) {
+    if (!units || units.length === 0) {
         container.innerHTML = '<p class="text-muted">No units have checked in yet.</p>';
         countBadge.textContent = '0';
         return;
     }
     
-    countBadge.textContent = unitCheckins.length;
+    countBadge.textContent = units.length;
     
     let html = '<div class="list-group">';
     
-    unitCheckins.forEach(unit => {
-        const statusBadge = unit.equipment_status === 'Operational' ? 'badge-success' :
-                           unit.equipment_status === 'Limited' ? 'badge-warning' :
-                           unit.equipment_status === 'Non-operational' ? 'badge-danger' :
-                           'badge-secondary';
+    units.forEach(unit => {
+        const equipmentStatusBadge = unit.equipment_status === 'Operational' ? 'badge-success' :
+                                   unit.equipment_status === 'Limited' ? 'badge-warning' :
+                                   unit.equipment_status === 'Non-operational' ? 'badge-danger' :
+                                   'badge-secondary';
         
-        const checkinTime = new Date(unit.checkin_time).toLocaleString();
+        const unitStatusBadge = getUnitStatusClass(unit.unit_status);
+        const checkinTime = unit.checkin_time ? new Date(unit.checkin_time).toLocaleString() : 'N/A';
         
         html += `
             <div class="list-group-item">
@@ -370,16 +448,41 @@ function displayUnitCheckins(unitCheckins) {
                     <h6 class="mb-1"><strong>Unit ${unit.unit_id}</strong></h6>
                     <small class="text-muted">${checkinTime}</small>
                 </div>
-                <div class="mb-1">
+                <div class="mb-2">
                     <strong>Officer:</strong> ${unit.officer_name}<br/>
                     <strong>Personnel:</strong> ${unit.personnel_count}<br/>
-                    <strong>Equipment Status:</strong> <span class="badge ${statusBadge}">${unit.equipment_status}</span>
+                    <strong>Equipment:</strong> <span class="badge ${equipmentStatusBadge}">${unit.equipment_status}</span><br/>
+                    <strong>Status:</strong> 
+                    <span id="unit-${unit.unit_id}-status" class="badge ${unitStatusBadge}">${unit.unit_status}</span>
+                    <button class="btn btn-sm btn-outline-secondary ml-2" onclick="toggleUnitStatusEdit('${unit.unit_id}', '${unit.unit_status}')">
+                        <i class="fas fa-edit"></i>
+                    </button>
+                    
+                    <div id="unit-${unit.unit_id}-edit-form" style="display: none; margin-top: 10px;">
+                        <div class="form-group">
+                            <label>Change Status:</label>
+                            <select id="unit-${unit.unit_id}-status-select" class="form-control" style="width: 150px; display: inline-block;">
+                                <option value="staging">staging</option>
+                                <option value="assigned">assigned</option>
+                                <option value="operating">operating</option>
+                                <option value="recovering">recovering</option>
+                                <option value="returned">returned</option>
+                            </select>
+                            <button class="btn btn-sm btn-success ml-2" onclick="updateUnitStatus('${unit.unit_id}', document.getElementById('unit-${unit.unit_id}-status-select').value)">
+                                <i class="fas fa-save"></i> Save
+                            </button>
+                            <button class="btn btn-sm btn-secondary ml-1" onclick="toggleUnitStatusEdit('${unit.unit_id}', '${unit.unit_status}')">
+                                <i class="fas fa-times"></i> Cancel
+                            </button>
+                        </div>
+                    </div>
                 </div>
                 <div class="d-flex justify-content-between">
                     <small class="text-muted">
                         ${unit.latitude && unit.longitude ? 
                             `Location: ${unit.latitude.toFixed(4)}, ${unit.longitude.toFixed(4)}` : 
                             'No location data'}
+                        ${unit.assigned_division ? ` | Division: ${unit.assigned_division}` : ''}
                     </small>
                     <div>
                         ${unit.photo_path ? 
@@ -459,15 +562,15 @@ function refreshIncidentData() {
                     document.getElementById('incident-stage-display').className = `badge ${getStageClass(currentStage)}`;
                 }
                 
-                // Update unit check-ins and map markers without reinitializing the map
+                // Update unit markers without reinitializing the map
                 if (map) {
                     // Clear existing unit markers
                     unitMarkers.forEach(marker => map.removeLayer(marker));
                     unitMarkers = [];
                     
                     // Add new unit markers
-                    if (data.unit_checkins && data.unit_checkins.length > 0) {
-                        data.unit_checkins.forEach(unit => {
+                    if (data.units && data.units.length > 0) {
+                        data.units.forEach(unit => {
                             if (unit.latitude && unit.longitude) {
                                 const marker = L.marker([unit.latitude, unit.longitude], {
                                     icon: L.divIcon({
@@ -483,7 +586,8 @@ function refreshIncidentData() {
                                     Officer: ${unit.officer_name}<br/>
                                     Personnel: ${unit.personnel_count}<br/>
                                     Equipment: ${unit.equipment_status}<br/>
-                                    Check-in: ${new Date(unit.checkin_time).toLocaleString()}
+                                    Status: ${unit.unit_status}<br/>
+                                    Check-in: ${unit.checkin_time ? new Date(unit.checkin_time).toLocaleString() : 'N/A'}
                                 `);
                                 
                                 unitMarkers.push(marker);
@@ -493,7 +597,7 @@ function refreshIncidentData() {
                 }
                 
                 // Update displays
-                displayUnitCheckins(data.unit_checkins);
+                displayUnits(data.units);
                 displayDivisions(data.divisions);
             }
         })
