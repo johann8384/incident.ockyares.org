@@ -36,7 +36,7 @@
                                     <p><strong>Type:</strong> <span id="incident-type"></span></p>
                                     <p><strong>Incident Commander:</strong> <span id="incident-commander"></span></p>
                                     <p><strong>Stage:</strong> 
-                                        <span id="incident-stage-display" class="badge badge-info"></span>
+                                        <span id="incident-stage-display" class="badge badge-info" style="color: #000 !important; background-color: #d1ecf1 !important; border: 1px solid #bee5eb;"></span>
                                         <button id="edit-stage-btn" class="btn btn-sm btn-outline-secondary ml-2" onclick="toggleStageEdit()">
                                             <i class="fas fa-edit"></i> Edit
                                         </button>
@@ -145,11 +145,31 @@ function showError(message) {
 
 function getStageClass(stage) {
     switch(stage) {
-        case 'New': return 'badge-secondary';
-        case 'Response': return 'badge-warning';
-        case 'Recovery': return 'badge-info';
-        case 'Closed': return 'badge-success';
-        default: return 'badge-secondary';
+        case 'New': 
+            return {
+                class: 'badge-secondary',
+                style: 'color: #000 !important; background-color: #e2e3e5 !important; border: 1px solid #d6d8db;'
+            };
+        case 'Response': 
+            return {
+                class: 'badge-warning',
+                style: 'color: #000 !important; background-color: #fff3cd !important; border: 1px solid #ffeaa7;'
+            };
+        case 'Recovery': 
+            return {
+                class: 'badge-info',
+                style: 'color: #000 !important; background-color: #d1ecf1 !important; border: 1px solid #bee5eb;'
+            };
+        case 'Closed': 
+            return {
+                class: 'badge-success',
+                style: 'color: #000 !important; background-color: #d4edda !important; border: 1px solid #c3e6cb;'
+            };
+        default: 
+            return {
+                class: 'badge-secondary',
+                style: 'color: #000 !important; background-color: #e2e3e5 !important; border: 1px solid #d6d8db;'
+            };
     }
 }
 
@@ -219,8 +239,11 @@ function updateStage() {
     .then(data => {
         if (data.success) {
             currentStage = newStage;
-            document.getElementById('incident-stage-display').textContent = newStage;
-            document.getElementById('incident-stage-display').className = `badge ${getStageClass(newStage)}`;
+            const stageStyle = getStageClass(newStage);
+            const stageElement = document.getElementById('incident-stage-display');
+            stageElement.textContent = newStage;
+            stageElement.className = `badge ${stageStyle.class}`;
+            stageElement.style.cssText = stageStyle.style;
             cancelStageEdit();
             
             // Show success message
@@ -335,8 +358,13 @@ function showIncidentData(data) {
     document.getElementById('incident-name').textContent = incident.incident_name;
     document.getElementById('incident-type').textContent = incident.incident_type;
     document.getElementById('incident-commander').textContent = incident.ic_name;
-    document.getElementById('incident-stage-display').textContent = incident.stage;
-    document.getElementById('incident-stage-display').className = `badge ${getStageClass(incident.stage)}`;
+    
+    // Update stage with proper styling
+    const stageStyle = getStageClass(incident.stage);
+    const stageElement = document.getElementById('incident-stage-display');
+    stageElement.textContent = incident.stage;
+    stageElement.className = `badge ${stageStyle.class}`;
+    stageElement.style.cssText = stageStyle.style;
     
     // Format and display start time
     const startTime = new Date(incident.start_time);
@@ -592,8 +620,11 @@ function refreshIncidentData() {
                 // Update current stage if it changed
                 if (data.incident.stage !== currentStage) {
                     currentStage = data.incident.stage;
-                    document.getElementById('incident-stage-display').textContent = currentStage;
-                    document.getElementById('incident-stage-display').className = `badge ${getStageClass(currentStage)}`;
+                    const stageStyle = getStageClass(currentStage);
+                    const stageElement = document.getElementById('incident-stage-display');
+                    stageElement.textContent = currentStage;
+                    stageElement.className = `badge ${stageStyle.class}`;
+                    stageElement.style.cssText = stageStyle.style;
                 }
                 
                 // Update location display if address changed
