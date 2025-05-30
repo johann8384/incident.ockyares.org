@@ -43,10 +43,10 @@
                 <div class="col-md-6">
                     <div class="card">
                         <div class="card-header">
-                            <h3>QR Codes for Teams</h3>
+                            <h3>Checked-in Units <span class="badge badge-secondary" id="unit-count">0</span></h3>
                         </div>
-                        <div class="card-body" id="qr-codes-container">
-                            <!-- QR codes will be loaded here -->
+                        <div class="card-body" id="unit-checkins-container">
+                            <!-- Unit check-ins will be loaded here -->
                         </div>
                     </div>
                 </div>
@@ -67,7 +67,7 @@
                 <div class="col-md-12">
                     <div class="card">
                         <div class="card-header">
-                            <h3>Division Status</h3>
+                            <h3>Division Status <span class="badge badge-secondary" id="division-count">0</span></h3>
                         </div>
                         <div class="card-body">
                             <div class="table-responsive">
@@ -100,6 +100,7 @@
 <script>
 let map;
 let incidentData = {};
+let unitMarkers = [];
 
 function showError(message) {
     document.getElementById('loading-alert').style.display = 'none';
@@ -131,16 +132,16 @@ function showIncidentData(data) {
     document.getElementById('incident-description').textContent = incident.description || 'No description provided';
     
     // Update map
-    updateMap(incident, data.divisions);
+    updateMap(incident, data.divisions, data.unit_checkins);
     
-    // Display QR codes
-    displayQRCodes(data.qr_codes);
+    // Display unit check-ins
+    displayUnitCheckins(data.unit_checkins);
     
     // Display divisions table
     displayDivisions(data.divisions);
 }
 
-function updateMap(incident, divisions) {
+function updateMap(incident, divisions, unitCheckins) {
     // Initialize map centered on incident location
     map = L.map('incident-map').setView([incident.latitude, incident.longitude], 13);
     
@@ -149,7 +150,14 @@ function updateMap(incident, divisions) {
     }).addTo(map);
     
     // Add incident center point marker
-    L.marker([incident.latitude, incident.longitude])
+    L.marker([incident.latitude, incident.longitude], {
+        icon: L.divIcon({
+            className: 'custom-div-icon',
+            html: '<div style="background-color: red; width: 20px; height: 20px; border-radius: 50%; border: 3px solid white; box-shadow: 0 0 5px rgba(0,0,0,0.5);"></div>',
+            iconSize: [20, 20],
+            iconAnchor: [10, 10]
+        })
+    })
         .addTo(map)
         .bindPopup(`<strong>${incident.incident_name}</strong><br/>Incident Command Post`)
         .openPopup();
@@ -161,7 +169,8 @@ function updateMap(incident, divisions) {
                 const coords = area.geometry.coordinates[0].map(coord => [coord[1], coord[0]]);
                 L.polygon(coords, {
                     color: area.area_type === 'hot_zone' ? 'red' : 'blue',
-                    fillOpacity: 0.2
+                    fillOpacity: 0.2,
+                    weight: 3
                 }).addTo(map).bindPopup(`Search Area: ${area.area_name}`);
             }
         });
@@ -189,39 +198,81 @@ function updateMap(incident, divisions) {
             }
         });
     }
+    
+    // Add unit location markers
+    if (unitCheckins && unitCheckins.length > 0) {
+        unitCheckins.forEach(unit => {
+            if (unit.latitude && unit.longitude) {
+                const marker = L.marker([unit.latitude, unit.longitude], {
+                    icon: L.divIcon({
+                        className: 'custom-div-icon',
+                        html: `<div style="background-color: blue; color: white; width: 24px; height: 24px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 5px rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold;">${unit.unit_id.slice(-2)}</div>`,
+                        iconSize: [24, 24],
+                        iconAnchor: [12, 12]
+                    })
+                }).addTo(map);
+                
+                marker.bindPopup(`
+                    <strong>Unit ${unit.unit_id}</strong><br/>
+                    Officer: ${unit.officer_name}<br/>
+                    Personnel: ${unit.personnel_count}<br/>
+                    Equipment: ${unit.equipment_status}<br/>
+                    Check-in: ${new Date(unit.checkin_time).toLocaleString()}
+                `);
+                
+                unitMarkers.push(marker);
+            }
+        });
+    }
 }
 
-function displayQRCodes(qrCodes) {
-    const container = document.getElementById('qr-codes-container');
+function displayUnitCheckins(unitCheckins) {
+    const container = document.getElementById('unit-checkins-container');
+    const countBadge = document.getElementById('unit-count');
     
-    if (!qrCodes || Object.keys(qrCodes).length === 0) {
-        container.innerHTML = '<p class="text-muted">No team QR codes available.</p>';
+    if (!unitCheckins || unitCheckins.length === 0) {
+        container.innerHTML = '<p class="text-muted">No units have checked in yet.</p>';
+        countBadge.textContent = '0';
         return;
     }
     
-    let html = '<div class="row">';
+    countBadge.textContent = unitCheckins.length;
     
-    Object.entries(qrCodes).forEach(([teamId, teamData]) => {
+    let html = '<div class="list-group">';
+    
+    unitCheckins.forEach(unit => {
+        const statusBadge = unit.equipment_status === 'Operational' ? 'badge-success' :
+                           unit.equipment_status === 'Limited' ? 'badge-warning' :
+                           unit.equipment_status === 'Non-operational' ? 'badge-danger' :
+                           'badge-secondary';
+        
+        const checkinTime = new Date(unit.checkin_time).toLocaleString();
+        
+        // Generate a simple QR code link for the unit
+        const qrLink = `/api/unit-qr/${unit.unit_id}`;
+        
         html += `
-            <div class="col-md-6 mb-3">
-                <div class="card">
-                    <div class="card-header">
-                        <h5>${teamData.team_name}</h5>
-                        <small class="text-muted">Leader: ${teamData.team_leader}</small>
-                    </div>
-                    <div class="card-body text-center">
-                        <img src="data:image/png;base64,${teamData.qr_code}" 
-                             alt="QR Code for ${teamData.team_name}" 
-                             style="max-width: 200px; max-height: 200px;" 
-                             class="img-fluid"/>
-                        <br/>
-                        <small class="text-muted">Scan to access team data</small>
-                        <br/>
-                        <a href="/qr/${teamData.qr_file}" 
-                           download="${teamData.qr_file}" 
-                           class="btn btn-sm btn-outline-primary mt-2">
-                            <i class="fas fa-download"></i> Download
-                        </a>
+            <div class="list-group-item">
+                <div class="d-flex w-100 justify-content-between">
+                    <h6 class="mb-1"><strong>Unit ${unit.unit_id}</strong></h6>
+                    <small class="text-muted">${checkinTime}</small>
+                </div>
+                <div class="mb-1">
+                    <strong>Officer:</strong> ${unit.officer_name}<br/>
+                    <strong>Personnel:</strong> ${unit.personnel_count}<br/>
+                    <strong>Equipment Status:</strong> <span class="badge ${statusBadge}">${unit.equipment_status}</span>
+                </div>
+                <div class="d-flex justify-content-between">
+                    <small class="text-muted">
+                        ${unit.latitude && unit.longitude ? 
+                            `Location: ${unit.latitude.toFixed(4)}, ${unit.longitude.toFixed(4)}` : 
+                            'No location data'}
+                    </small>
+                    <div>
+                        ${unit.photo_path ? 
+                            `<a href="${unit.photo_path}" target="_blank" class="btn btn-sm btn-outline-info me-2">View Photo</a>` : 
+                            ''}
+                        <a href="#" onclick="generateUnitQR('${unit.unit_id}', '${unit.officer_name}')" class="btn btn-sm btn-outline-primary">QR Code</a>
                     </div>
                 </div>
             </div>
@@ -232,13 +283,23 @@ function displayQRCodes(qrCodes) {
     container.innerHTML = html;
 }
 
+function generateUnitQR(unitId, officerName) {
+    // This would generate a QR code for the specific unit
+    // For now, just show an alert
+    alert(`QR Code for Unit ${unitId} (${officerName}) would be generated here.`);
+}
+
 function displayDivisions(divisions) {
     const tbody = document.getElementById('divisions-tbody');
+    const countBadge = document.getElementById('division-count');
     
     if (!divisions || divisions.length === 0) {
         tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">No divisions created.</td></tr>';
+        countBadge.textContent = '0';
         return;
     }
+    
+    countBadge.textContent = divisions.length;
     
     let html = '';
     
@@ -268,6 +329,59 @@ function formatDateTime(dateString) {
     return new Date(dateString).toLocaleString();
 }
 
+// Auto-refresh incident data every 30 seconds
+function refreshIncidentData() {
+    const incidentId = '{{ incident_id }}';
+    
+    fetch(`/api/incident/${incidentId}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                incidentData = data;
+                
+                // Update unit check-ins and map markers without reinitializing the map
+                if (map) {
+                    // Clear existing unit markers
+                    unitMarkers.forEach(marker => map.removeLayer(marker));
+                    unitMarkers = [];
+                    
+                    // Add new unit markers
+                    if (data.unit_checkins && data.unit_checkins.length > 0) {
+                        data.unit_checkins.forEach(unit => {
+                            if (unit.latitude && unit.longitude) {
+                                const marker = L.marker([unit.latitude, unit.longitude], {
+                                    icon: L.divIcon({
+                                        className: 'custom-div-icon',
+                                        html: `<div style="background-color: blue; color: white; width: 24px; height: 24px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 5px rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold;">${unit.unit_id.slice(-2)}</div>`,
+                                        iconSize: [24, 24],
+                                        iconAnchor: [12, 12]
+                                    })
+                                }).addTo(map);
+                                
+                                marker.bindPopup(`
+                                    <strong>Unit ${unit.unit_id}</strong><br/>
+                                    Officer: ${unit.officer_name}<br/>
+                                    Personnel: ${unit.personnel_count}<br/>
+                                    Equipment: ${unit.equipment_status}<br/>
+                                    Check-in: ${new Date(unit.checkin_time).toLocaleString()}
+                                `);
+                                
+                                unitMarkers.push(marker);
+                            }
+                        });
+                    }
+                }
+                
+                // Update displays
+                displayUnitCheckins(data.unit_checkins);
+                displayDivisions(data.divisions);
+            }
+        })
+        .catch(error => {
+            console.error('Error refreshing incident data:', error);
+        });
+}
+
 // Load incident data when page loads
 document.addEventListener('DOMContentLoaded', function() {
     const incidentId = '{{ incident_id }}';
@@ -278,6 +392,9 @@ document.addEventListener('DOMContentLoaded', function() {
             if (data.success) {
                 incidentData = data;
                 showIncidentData(data);
+                
+                // Start auto-refresh every 30 seconds
+                setInterval(refreshIncidentData, 30000);
             } else {
                 showError(data.error || 'Failed to load incident data');
             }
