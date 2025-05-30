@@ -1,0 +1,533 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-md-8 col-lg-6">
+            <div class="card">
+                <div class="card-header bg-primary text-white">
+                    <h4 class="card-title mb-0">
+                        <i class="fas fa-clipboard-check"></i> Unit Status Update
+                    </h4>
+                </div>
+                <div class="card-body">
+                    
+                    <div class="alert alert-info" id="loading-alert">
+                        <i class="fas fa-spinner fa-spin"></i> Loading unit data...
+                    </div>
+                    
+                    <div class="alert alert-danger" id="error-alert" style="display: none;">
+                        <i class="fas fa-exclamation-triangle"></i> <span id="error-message"></span>
+                    </div>
+                    
+                    <div id="update-form-container" style="display: none;">
+                        <form id="statusUpdateForm">
+                            <!-- Unit Selection -->
+                            <div class="form-group">
+                                <label for="incident-select"><strong>Incident:</strong></label>
+                                <select id="incident-select" name="incident_id" class="form-control" required>
+                                    <option value="">Select Incident</option>
+                                </select>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="unit-select"><strong>Unit:</strong></label>
+                                <select id="unit-select" name="unit_id" class="form-control" required>
+                                    <option value="">Select Unit</option>
+                                </select>
+                            </div>
+                            
+                            <div id="unit-details" style="display: none;">
+                                <div class="card bg-light mb-3">
+                                    <div class="card-body">
+                                        <h6>Current Unit Status:</h6>
+                                        <p id="current-unit-info"></p>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Status Change -->
+                            <div class="form-group">
+                                <label for="status-change"><strong>Status Change:</strong></label>
+                                <select id="status-change" name="status_change" class="form-control" required>
+                                    <option value="">Select New Status</option>
+                                    <option value="staging">Staging</option>
+                                    <option value="assigned">Assigned</option>
+                                    <option value="operating">Operating</option>
+                                    <option value="recovering">Recovering</option>
+                                    <option value="returned">Returned</option>
+                                </select>
+                            </div>
+                            
+                            <!-- Progress Percentage -->
+                            <div class="form-group">
+                                <label for="progress-percentage">
+                                    <strong>% Complete on Assigned Area:</strong>
+                                    <small class="text-muted">(if applicable)</small>
+                                </label>
+                                <div class="input-group">
+                                    <input type="range" id="progress-slider" class="form-control-range" min="0" max="100" value="0" style="width: 100%;">
+                                    <div class="input-group-append">
+                                        <span class="input-group-text" id="progress-display">0%</span>
+                                    </div>
+                                </div>
+                                <input type="hidden" id="progress-percentage" name="progress_percentage" value="0">
+                            </div>
+                            
+                            <!-- Need Assistance -->
+                            <div class="form-group">
+                                <div class="form-check">
+                                    <input type="checkbox" id="need-assistance" name="need_assistance" class="form-check-input">
+                                    <label for="need-assistance" class="form-check-label">
+                                        <strong>Need Assistance</strong>
+                                        <small class="text-muted d-block">Check if unit requires additional support or resources</small>
+                                    </label>
+                                </div>
+                            </div>
+                            
+                            <!-- Comment -->
+                            <div class="form-group">
+                                <label for="comment"><strong>Brief Comment:</strong></label>
+                                <textarea id="comment" name="comment" class="form-control" rows="3" 
+                                          placeholder="Provide a brief update on current situation, findings, or needs..."></textarea>
+                                <small class="text-muted">Optional: Any important information to share with command</small>
+                            </div>
+                            
+                            <!-- Location -->
+                            <div class="form-group">
+                                <label><strong>Update Location:</strong></label>
+                                <div class="btn-group btn-group-toggle d-block" data-toggle="buttons">
+                                    <label class="btn btn-outline-primary">
+                                        <input type="radio" name="location_method" value="gps" id="location-gps"> Use GPS
+                                    </label>
+                                    <label class="btn btn-outline-primary">
+                                        <input type="radio" name="location_method" value="map" id="location-map"> Click on Map
+                                    </label>
+                                    <label class="btn btn-outline-secondary">
+                                        <input type="radio" name="location_method" value="current" id="location-current" checked> Keep Current
+                                    </label>
+                                </div>
+                                
+                                <div id="gps-location" style="display: none; margin-top: 10px;">
+                                    <button type="button" class="btn btn-info" onclick="getCurrentLocation()">
+                                        <i class="fas fa-crosshairs"></i> Get Current GPS Location
+                                    </button>
+                                    <div id="gps-status" class="mt-2"></div>
+                                </div>
+                                
+                                <div id="map-location" style="display: none; margin-top: 10px;">
+                                    <p class="text-muted">Click on the map below to set your location:</p>
+                                    <div id="location-map-container" style="height: 300px;"></div>
+                                </div>
+                                
+                                <div id="location-display" class="mt-2" style="display: none;">
+                                    <small class="text-muted">
+                                        <strong>Selected Location:</strong> <span id="location-coords"></span>
+                                    </small>
+                                </div>
+                                
+                                <input type="hidden" id="latitude" name="latitude">
+                                <input type="hidden" id="longitude" name="longitude">
+                                <input type="hidden" id="location-source" name="location_source" value="current">
+                            </div>
+                            
+                            <!-- Submit -->
+                            <div class="form-group text-center">
+                                <button type="submit" class="btn btn-success btn-lg" id="submit-btn">
+                                    <i class="fas fa-paper-plane"></i> Submit Status Update
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                    
+                    <div id="success-container" style="display: none;">
+                        <div class="alert alert-success text-center">
+                            <i class="fas fa-check-circle fa-3x mb-3"></i>
+                            <h4>Status Update Submitted Successfully!</h4>
+                            <p id="success-message">Your update has been recorded and command has been notified.</p>
+                            <button class="btn btn-primary" onclick="resetForm()">Submit Another Update</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+
+<script>
+let map;
+let locationMarker;
+let incidents = [];
+let units = [];
+let selectedUnit = null;
+
+// Initialize page
+document.addEventListener('DOMContentLoaded', function() {
+    loadIncidents();
+    setupEventListeners();
+});
+
+function setupEventListeners() {
+    // Progress slider
+    document.getElementById('progress-slider').addEventListener('input', function() {
+        const value = this.value;
+        document.getElementById('progress-percentage').value = value;
+        document.getElementById('progress-display').textContent = value + '%';
+    });
+    
+    // Location method selection
+    document.querySelectorAll('input[name="location_method"]').forEach(radio => {
+        radio.addEventListener('change', function() {
+            handleLocationMethodChange(this.value);
+        });
+    });
+    
+    // Incident selection
+    document.getElementById('incident-select').addEventListener('change', function() {
+        const incidentId = this.value;
+        if (incidentId) {
+            loadUnitsForIncident(incidentId);
+        } else {
+            clearUnitSelect();
+        }
+    });
+    
+    // Unit selection
+    document.getElementById('unit-select').addEventListener('change', function() {
+        const unitId = this.value;
+        if (unitId) {
+            showUnitDetails(unitId);
+        } else {
+            hideUnitDetails();
+        }
+    });
+    
+    // Form submission
+    document.getElementById('statusUpdateForm').addEventListener('submit', handleFormSubmit);
+}
+
+function loadIncidents() {
+    fetch('/api/incidents')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                incidents = data.incidents;
+                populateIncidentSelect();
+                showUpdateForm();
+            } else {
+                showError('Failed to load incidents: ' + (data.error || 'Unknown error'));
+            }
+        })
+        .catch(error => {
+            console.error('Error loading incidents:', error);
+            showError('Network error loading incidents');
+        });
+}
+
+function populateIncidentSelect() {
+    const select = document.getElementById('incident-select');
+    select.innerHTML = '<option value="">Select Incident</option>';
+    
+    incidents.forEach(incident => {
+        const option = document.createElement('option');
+        option.value = incident.incident_id;
+        option.textContent = `${incident.incident_name} (${incident.incident_type})`;
+        select.appendChild(option);
+    });
+}
+
+function loadUnitsForIncident(incidentId) {
+    fetch(`/api/incident/${incidentId}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.units) {
+                units = data.units;
+                populateUnitSelect();
+            } else {
+                showError('Failed to load units for incident');
+                clearUnitSelect();
+            }
+        })
+        .catch(error => {
+            console.error('Error loading units:', error);
+            showError('Network error loading units');
+            clearUnitSelect();
+        });
+}
+
+function populateUnitSelect() {
+    const select = document.getElementById('unit-select');
+    select.innerHTML = '<option value="">Select Unit</option>';
+    
+    units.forEach(unit => {
+        const option = document.createElement('option');
+        option.value = unit.unit_id;
+        option.textContent = `Unit ${unit.unit_id} - ${unit.officer_name}`;
+        select.appendChild(option);
+    });
+}
+
+function clearUnitSelect() {
+    document.getElementById('unit-select').innerHTML = '<option value="">Select Unit</option>';
+    hideUnitDetails();
+}
+
+function showUnitDetails(unitId) {
+    selectedUnit = units.find(unit => unit.unit_id === unitId);
+    if (selectedUnit) {
+        const detailsDiv = document.getElementById('unit-details');
+        const infoP = document.getElementById('current-unit-info');
+        
+        infoP.innerHTML = `
+            <strong>Officer:</strong> ${selectedUnit.officer_name}<br>
+            <strong>Personnel:</strong> ${selectedUnit.personnel_count}<br>
+            <strong>Equipment Status:</strong> ${selectedUnit.equipment_status}<br>
+            <strong>Current Status:</strong> ${selectedUnit.unit_status}<br>
+            <strong>Assignment:</strong> ${selectedUnit.assigned_division || 'None'}<br>
+            <strong>Last Check-in:</strong> ${selectedUnit.checkin_time ? new Date(selectedUnit.checkin_time).toLocaleString() : 'N/A'}
+        `;
+        
+        detailsDiv.style.display = 'block';
+        
+        // Set current status as default
+        document.getElementById('status-change').value = selectedUnit.unit_status;
+        
+        // Set current location if available
+        if (selectedUnit.latitude && selectedUnit.longitude) {
+            document.getElementById('latitude').value = selectedUnit.latitude;
+            document.getElementById('longitude').value = selectedUnit.longitude;
+            updateLocationDisplay(selectedUnit.latitude, selectedUnit.longitude);
+        }
+    }
+}
+
+function hideUnitDetails() {
+    document.getElementById('unit-details').style.display = 'none';
+    selectedUnit = null;
+}
+
+function handleLocationMethodChange(method) {
+    // Hide all location inputs
+    document.getElementById('gps-location').style.display = 'none';
+    document.getElementById('map-location').style.display = 'none';
+    
+    document.getElementById('location-source').value = method;
+    
+    if (method === 'gps') {
+        document.getElementById('gps-location').style.display = 'block';
+    } else if (method === 'map') {
+        document.getElementById('map-location').style.display = 'block';
+        initializeLocationMap();
+    }
+}
+
+function getCurrentLocation() {
+    const statusDiv = document.getElementById('gps-status');
+    statusDiv.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Getting GPS location...';
+    
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+            function(position) {
+                const lat = position.coords.latitude;
+                const lng = position.coords.longitude;
+                
+                document.getElementById('latitude').value = lat;
+                document.getElementById('longitude').value = lng;
+                
+                statusDiv.innerHTML = '<i class="fas fa-check text-success"></i> GPS location obtained';
+                updateLocationDisplay(lat, lng);
+            },
+            function(error) {
+                let errorMsg = 'GPS location failed: ';
+                switch(error.code) {
+                    case error.PERMISSION_DENIED:
+                        errorMsg += 'Permission denied';
+                        break;
+                    case error.POSITION_UNAVAILABLE:
+                        errorMsg += 'Position unavailable';
+                        break;
+                    case error.TIMEOUT:
+                        errorMsg += 'Request timeout';
+                        break;
+                    default:
+                        errorMsg += 'Unknown error';
+                        break;
+                }
+                statusDiv.innerHTML = '<i class="fas fa-exclamation-triangle text-warning"></i> ' + errorMsg;
+            }
+        );
+    } else {
+        statusDiv.innerHTML = '<i class="fas fa-times text-danger"></i> GPS not supported by browser';
+    }
+}
+
+function initializeLocationMap() {
+    if (map) {
+        map.remove();
+    }
+    
+    // Use current unit location or incident location as default
+    let centerLat = 37.7749;
+    let centerLng = -122.4194;
+    
+    if (selectedUnit && selectedUnit.latitude && selectedUnit.longitude) {
+        centerLat = selectedUnit.latitude;
+        centerLng = selectedUnit.longitude;
+    } else if (incidents.length > 0) {
+        const currentIncident = incidents.find(inc => inc.incident_id === document.getElementById('incident-select').value);
+        if (currentIncident) {
+            centerLat = currentIncident.latitude;
+            centerLng = currentIncident.longitude;
+        }
+    }
+    
+    map = L.map('location-map-container').setView([centerLat, centerLng], 13);
+    
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+    
+    // Add click handler
+    map.on('click', function(e) {
+        const lat = e.latlng.lat;
+        const lng = e.latlng.lng;
+        
+        // Remove existing marker
+        if (locationMarker) {
+            map.removeLayer(locationMarker);
+        }
+        
+        // Add new marker
+        locationMarker = L.marker([lat, lng]).addTo(map)
+            .bindPopup('Selected Location')
+            .openPopup();
+        
+        // Update form fields
+        document.getElementById('latitude').value = lat;
+        document.getElementById('longitude').value = lng;
+        
+        updateLocationDisplay(lat, lng);
+    });
+    
+    // Add existing location marker if available
+    if (selectedUnit && selectedUnit.latitude && selectedUnit.longitude) {
+        locationMarker = L.marker([selectedUnit.latitude, selectedUnit.longitude]).addTo(map)
+            .bindPopup('Current Location');
+    }
+}
+
+function updateLocationDisplay(lat, lng) {
+    document.getElementById('location-coords').textContent = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+    document.getElementById('location-display').style.display = 'block';
+}
+
+function handleFormSubmit(e) {
+    e.preventDefault();
+    
+    const formData = new FormData(e.target);
+    const data = {};
+    
+    // Convert FormData to object
+    for (let [key, value] of formData.entries()) {
+        if (key === 'need_assistance') {
+            data[key] = document.getElementById('need-assistance').checked;
+        } else if (key === 'progress_percentage') {
+            data[key] = parseInt(value) || null;
+        } else {
+            data[key] = value;
+        }
+    }
+    
+    // Add officer name from selected unit
+    if (selectedUnit) {
+        data.officer_name = selectedUnit.officer_name;
+    }
+    
+    // Validate required fields
+    if (!data.incident_id || !data.unit_id || !data.status_change) {
+        showError('Please fill in all required fields');
+        return;
+    }
+    
+    // Submit the update
+    submitStatusUpdate(data);
+}
+
+function submitStatusUpdate(data) {
+    const submitBtn = document.getElementById('submit-btn');
+    const originalText = submitBtn.innerHTML;
+    
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Submitting...';
+    submitBtn.disabled = true;
+    
+    fetch('/api/unit-status-update', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(result => {
+        if (result.success) {
+            showSuccess(result.message || 'Status update submitted successfully');
+        } else {
+            showError(result.error || 'Failed to submit status update');
+            submitBtn.innerHTML = originalText;
+            submitBtn.disabled = false;
+        }
+    })
+    .catch(error => {
+        console.error('Error submitting status update:', error);
+        showError('Network error submitting status update');
+        submitBtn.innerHTML = originalText;
+        submitBtn.disabled = false;
+    });
+}
+
+function showError(message) {
+    document.getElementById('loading-alert').style.display = 'none';
+    document.getElementById('error-alert').style.display = 'block';
+    document.getElementById('error-message').textContent = message;
+}
+
+function showUpdateForm() {
+    document.getElementById('loading-alert').style.display = 'none';
+    document.getElementById('update-form-container').style.display = 'block';
+}
+
+function showSuccess(message) {
+    document.getElementById('update-form-container').style.display = 'none';
+    document.getElementById('success-container').style.display = 'block';
+    document.getElementById('success-message').textContent = message;
+}
+
+function resetForm() {
+    document.getElementById('success-container').style.display = 'none';
+    document.getElementById('update-form-container').style.display = 'block';
+    document.getElementById('statusUpdateForm').reset();
+    
+    // Reset dynamic elements
+    document.getElementById('progress-display').textContent = '0%';
+    document.getElementById('location-display').style.display = 'none';
+    hideUnitDetails();
+    clearUnitSelect();
+    
+    // Remove map marker
+    if (locationMarker && map) {
+        map.removeLayer(locationMarker);
+        locationMarker = null;
+    }
+    
+    // Reset submit button
+    const submitBtn = document.getElementById('submit-btn');
+    submitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Submit Status Update';
+    submitBtn.disabled = false;
+}
+</script>
+{% endblock %}
