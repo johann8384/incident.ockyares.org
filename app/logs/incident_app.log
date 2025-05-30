@@ -27,3 +27,35 @@
 2025-05-30 04:11:15,749 INFO: Created search area 7 for incident USR202505304DC7 [in /app/app.py:141]
 2025-05-30 04:11:22,561 INFO: Created 8618 divisions for incident USR202505304DC7 [in /app/app.py:241]
 2025-05-30 04:11:22,878 INFO: Generated 3 QR codes for incident USR202505304DC7 [in /app/app.py:302]
+2025-05-30 04:17:48,504 INFO: Incident Management System startup [in /app/app.py:30]
+2025-05-30 04:18:28,170 INFO: Created incident: USR2025053039AE [in /app/app.py:100]
+2025-05-30 04:18:28,227 INFO: Created search area 8 for incident USR2025053039AE [in /app/app.py:141]
+2025-05-30 04:18:28,685 INFO: Created 391 divisions for incident USR2025053039AE [in /app/app.py:241]
+2025-05-30 04:18:29,057 INFO: Generated 3 QR codes for incident USR2025053039AE [in /app/app.py:302]
+2025-05-30 04:18:31,917 INFO: Created incident: USR2025053033C3 [in /app/app.py:100]
+2025-05-30 04:18:31,966 INFO: Created search area 9 for incident USR2025053033C3 [in /app/app.py:141]
+2025-05-30 04:18:32,376 INFO: Created 391 divisions for incident USR2025053033C3 [in /app/app.py:241]
+2025-05-30 04:18:32,774 INFO: Generated 3 QR codes for incident USR2025053033C3 [in /app/app.py:302]
+2025-05-30 04:19:11,889 INFO: Created incident: USR20250530DCFA [in /app/app.py:100]
+2025-05-30 04:19:11,964 INFO: Created search area 10 for incident USR20250530DCFA [in /app/app.py:141]
+2025-05-30 04:19:12,426 INFO: Created 391 divisions for incident USR20250530DCFA [in /app/app.py:241]
+2025-05-30 04:19:12,845 INFO: Generated 3 QR codes for incident USR20250530DCFA [in /app/app.py:302]
+2025-05-30 04:24:43,973 INFO: Incident Management System startup [in /app/app.py:30]
+2025-05-30 04:26:07,965 INFO: Created incident: USR20250530649E [in /app/app.py:279]
+2025-05-30 04:26:08,636 INFO: Created search area 11 for incident USR20250530649E [in /app/app.py:320]
+2025-05-30 04:26:14,021 INFO: Created 1443 divisions for incident USR20250530649E [in /app/app.py:420]
+2025-05-30 04:26:15,358 INFO: Generated 3 QR codes for incident USR20250530649E [in /app/app.py:481]
+2025-05-30 04:26:17,680 INFO: Created incident: USR20250530A235 [in /app/app.py:279]
+2025-05-30 04:26:17,906 INFO: Created search area 12 for incident USR20250530A235 [in /app/app.py:320]
+2025-05-30 04:26:22,694 INFO: Created 1443 divisions for incident USR20250530A235 [in /app/app.py:420]
+2025-05-30 04:26:23,356 INFO: Generated 3 QR codes for incident USR20250530A235 [in /app/app.py:481]
+2025-05-30 04:27:23,151 ERROR: Failed to get incident details: column "updated_at" does not exist
+LINE 5:                        created_at, updated_at
+                                           ^
+HINT:  Perhaps you meant to reference the column "incidents.created_at".
+ [in /app/app.py:122]
+2025-05-30 04:27:23,200 ERROR: Error getting incident data for USR20250530A235: column "updated_at" does not exist
+LINE 5:                        created_at, updated_at
+                                           ^
+HINT:  Perhaps you meant to reference the column "incidents.created_at".
+ [in /app/app.py:581]
