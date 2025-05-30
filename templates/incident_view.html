@@ -226,7 +226,7 @@ function updateStage() {
             // Show success message
             showAlert('success', `Incident stage updated to ${newStage}`);
         } else {
-            alert('Error updating stage: ' + data.error);
+            alert('Error updating stage: ' + (data.error || 'Unknown error'));
         }
     })
     .catch(error => {
@@ -243,6 +243,8 @@ function updateStage() {
 function updateUnitStatus(unitId, newStatus) {
     const incidentId = '{{ incident_id }}';
     
+    console.log('Updating unit status:', { incidentId, unitId, newStatus });
+    
     // Show loading state
     const statusElement = document.getElementById(`unit-${unitId}-status`);
     const originalHTML = statusElement.innerHTML;
@@ -255,8 +257,12 @@ function updateUnitStatus(unitId, newStatus) {
         },
         body: JSON.stringify({ status: newStatus })
     })
-    .then(response => response.json())
+    .then(response => {
+        console.log('Response status:', response.status);
+        return response.json();
+    })
     .then(data => {
+        console.log('Response data:', data);
         if (data.success) {
             // Update the status display
             statusElement.innerHTML = `<span class="badge ${getUnitStatusClass(newStatus)}">${newStatus}</span>`;
@@ -273,13 +279,13 @@ function updateUnitStatus(unitId, newStatus) {
             }, 1000);
         } else {
             statusElement.innerHTML = originalHTML;
-            alert('Error updating unit status: ' + data.error);
+            alert('Error updating unit status: ' + (data.error || 'Unknown error'));
         }
     })
     .catch(error => {
         console.error('Error updating unit status:', error);
         statusElement.innerHTML = originalHTML;
-        alert('Network error updating unit status');
+        alert('Network error updating unit status: ' + error.message);
     });
 }
 
@@ -455,44 +461,51 @@ function displayUnits(units) {
     let html = '<div class="list-group">';
     
     units.forEach(unit => {
-        const equipmentStatusBadge = unit.equipment_status === 'Operational' ? 'badge-success' :
-                                   unit.equipment_status === 'Limited' ? 'badge-warning' :
-                                   unit.equipment_status === 'Non-operational' ? 'badge-danger' :
+        // Handle null/undefined values safely
+        const unitId = unit.unit_id || 'Unknown';
+        const officerName = unit.officer_name || 'Unknown';
+        const personnelCount = unit.personnel_count || 0;
+        const equipmentStatus = unit.equipment_status || 'Unknown';
+        const unitStatus = unit.unit_status || 'staging';
+        const checkinTime = unit.checkin_time ? new Date(unit.checkin_time).toLocaleString() : 'N/A';
+        
+        const equipmentStatusBadge = equipmentStatus === 'Operational' ? 'badge-success' :
+                                   equipmentStatus === 'Limited' ? 'badge-warning' :
+                                   equipmentStatus === 'Non-operational' ? 'badge-danger' :
                                    'badge-secondary';
         
-        const unitStatusBadge = getUnitStatusClass(unit.unit_status);
-        const checkinTime = unit.checkin_time ? new Date(unit.checkin_time).toLocaleString() : 'N/A';
+        const unitStatusBadge = getUnitStatusClass(unitStatus);
         
         html += `
             <div class="list-group-item">
                 <div class="d-flex w-100 justify-content-between">
-                    <h6 class="mb-1"><strong>Unit ${unit.unit_id}</strong></h6>
+                    <h6 class="mb-1"><strong>Unit ${unitId}</strong></h6>
                     <small class="text-muted">${checkinTime}</small>
                 </div>
                 <div class="mb-2">
-                    <strong>Officer:</strong> ${unit.officer_name}<br/>
-                    <strong>Personnel:</strong> ${unit.personnel_count}<br/>
-                    <strong>Equipment:</strong> <span class="badge ${equipmentStatusBadge}">${unit.equipment_status}</span><br/>
+                    <strong>Officer:</strong> ${officerName}<br/>
+                    <strong>Personnel:</strong> ${personnelCount}<br/>
+                    <strong>Equipment:</strong> <span class="badge ${equipmentStatusBadge}">${equipmentStatus}</span><br/>
                     <strong>Status:</strong> 
-                    <span id="unit-${unit.unit_id}-status" class="badge ${unitStatusBadge}">${unit.unit_status}</span>
-                    <button class="btn btn-sm btn-outline-secondary ml-2" onclick="toggleUnitStatusEdit('${unit.unit_id}', '${unit.unit_status}')">
-                        <i class="fas fa-edit"></i>
+                    <span id="unit-${unitId}-status" class="badge ${unitStatusBadge}">${unitStatus}</span>
+                    <button class="btn btn-sm btn-outline-secondary ml-2" onclick="toggleUnitStatusEdit('${unitId}', '${unitStatus}')">
+                        <i class="fas fa-edit"></i> Edit
                     </button>
                     
-                    <div id="unit-${unit.unit_id}-edit-form" style="display: none; margin-top: 10px;">
+                    <div id="unit-${unitId}-edit-form" style="display: none; margin-top: 10px;">
                         <div class="form-group">
                             <label>Change Status:</label>
-                            <select id="unit-${unit.unit_id}-status-select" class="form-control" style="width: 150px; display: inline-block;">
-                                <option value="staging">staging</option>
-                                <option value="assigned">assigned</option>
-                                <option value="operating">operating</option>
-                                <option value="recovering">recovering</option>
-                                <option value="returned">returned</option>
+                            <select id="unit-${unitId}-status-select" class="form-control" style="width: 150px; display: inline-block;">
+                                <option value="staging">Staging</option>
+                                <option value="assigned">Assigned</option>
+                                <option value="operating">Operating</option>
+                                <option value="recovering">Recovering</option>
+                                <option value="returned">Returned</option>
                             </select>
-                            <button class="btn btn-sm btn-success ml-2" onclick="updateUnitStatus('${unit.unit_id}', document.getElementById('unit-${unit.unit_id}-status-select').value)">
+                            <button class="btn btn-sm btn-success ml-2" onclick="updateUnitStatus('${unitId}', document.getElementById('unit-${unitId}-status-select').value)">
                                 <i class="fas fa-save"></i> Save
                             </button>
-                            <button class="btn btn-sm btn-secondary ml-1" onclick="toggleUnitStatusEdit('${unit.unit_id}', '${unit.unit_status}')">
+                            <button class="btn btn-sm btn-secondary ml-1" onclick="toggleUnitStatusEdit('${unitId}', '${unitStatus}')">
                                 <i class="fas fa-times"></i> Cancel
                             </button>
                         </div>
@@ -509,7 +522,7 @@ function displayUnits(units) {
                         ${unit.photo_path ? 
                             `<a href="${unit.photo_path}" target="_blank" class="btn btn-sm btn-outline-info me-2">View Photo</a>` : 
                             ''}
-                        <a href="#" onclick="generateUnitQR('${unit.unit_id}', '${unit.officer_name}')" class="btn btn-sm btn-outline-primary">QR Code</a>
+                        <a href="#" onclick="generateUnitQR('${unitId}', '${officerName}')" class="btn btn-sm btn-outline-primary">QR Code</a>
                     </div>
                 </div>
             </div>
