@@ -337,6 +337,14 @@
             width: 100%;
         }
 
+        .emoji-marker {
+            background: none !important;
+            border: none !important;
+            text-align: center;
+            font-size: 20px;
+            line-height: 30px;
+        }
+
         @media (max-width: 480px) {
             .container {
                 margin: 5px;
@@ -494,9 +502,11 @@
     <script>
         let map;
         let locationMarker;
+        let incidentMarker;
         let incidents = [];
         let units = [];
         let selectedUnit = null;
+        let incidentLocation = null;
 
         // Initialize page
         document.addEventListener('DOMContentLoaded', function() {
@@ -538,8 +548,18 @@
                 const incidentId = this.value;
                 if (incidentId) {
                     loadUnitsForIncident(incidentId);
+                    // Set incident location for map
+                    const selectedIncident = incidents.find(inc => inc.incident_id === incidentId);
+                    if (selectedIncident && selectedIncident.latitude && selectedIncident.longitude) {
+                        incidentLocation = {
+                            lat: selectedIncident.latitude,
+                            lng: selectedIncident.longitude,
+                            name: selectedIncident.incident_name
+                        };
+                    }
                 } else {
                     clearUnitSelect();
+                    incidentLocation = null;
                 }
             });
             
@@ -686,6 +706,9 @@
             if (selectedUnit && selectedUnit.latitude && selectedUnit.longitude) {
                 center = [selectedUnit.latitude, selectedUnit.longitude];
                 hasLocation = true;
+            } else if (incidentLocation) {
+                // Fall back to incident location
+                center = [incidentLocation.lat, incidentLocation.lng];
             }
 
             map = L.map('map').setView(center, hasLocation ? 16 : 13);
@@ -694,6 +717,9 @@
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             }).addTo(map);
+
+            // Add incident marker first (so it's behind unit marker)
+            addIncidentMarker();
 
             // Add unit's last location marker if available
             if (hasLocation) {
@@ -712,21 +738,25 @@
             map.on('click', function(e) {
                 setLocationFromMap(e.latlng.lat, e.latlng.lng);
             });
+        }
 
-            // Add custom CSS for emoji markers
-            if (!document.getElementById('emoji-marker-style')) {
-                const style = document.createElement('style');
-                style.id = 'emoji-marker-style';
-                style.textContent = `
-                    .emoji-marker {
-                        background: none !important;
-                        border: none !important;
-                        text-align: center;
-                        font-size: 20px;
-                        line-height: 30px;
-                    }
-                `;
-                document.head.appendChild(style);
+        function addIncidentMarker() {
+            // Remove existing incident marker
+            if (incidentMarker) {
+                map.removeLayer(incidentMarker);
+            }
+
+            // Add incident marker if location is available
+            if (incidentLocation && map) {
+                incidentMarker = L.marker([incidentLocation.lat, incidentLocation.lng], {
+                    icon: L.divIcon({
+                        html: '🚨',
+                        iconSize: [30, 30],
+                        className: 'emoji-marker'
+                    })
+                }).addTo(map);
+                
+                incidentMarker.bindPopup(`<b>Incident Location</b><br>${incidentLocation.name || 'Emergency Incident'}`);
             }
         }
 
