@@ -75,9 +75,9 @@ class IncidentManager:
         
         try:
             cursor.execute("""
-                SELECT incident_id, incident_name, incident_type, start_time
+                SELECT incident_id, incident_name, incident_type, start_time, stage
                 FROM incidents 
-                WHERE status = 'active'
+                WHERE stage != 'Closed'
                 ORDER BY start_time DESC
             """)
             
@@ -93,6 +93,40 @@ class IncidentManager:
             
         except Exception as e:
             app.logger.error(f"Failed to get active incidents: {e}")
+            raise e
+        finally:
+            cursor.close()
+            self.close_db()
+
+    def update_incident_stage(self, incident_id, new_stage):
+        """Update incident stage"""
+        conn = self.connect_db()
+        cursor = conn.cursor()
+        
+        try:
+            # Validate stage
+            valid_stages = ['New', 'Response', 'Recovery', 'Closed']
+            if new_stage not in valid_stages:
+                raise ValueError(f"Invalid stage. Must be one of: {', '.join(valid_stages)}")
+            
+            cursor.execute("""
+                UPDATE incidents 
+                SET stage = %s, updated_at = NOW()
+                WHERE incident_id = %s
+                RETURNING incident_id
+            """, (new_stage, incident_id))
+            
+            result = cursor.fetchone()
+            if not result:
+                raise ValueError("Incident not found")
+            
+            conn.commit()
+            app.logger.info(f"Updated incident {incident_id} stage to {new_stage}")
+            return True
+            
+        except Exception as e:
+            conn.rollback()
+            app.logger.error(f"Failed to update incident stage: {e}")
             raise e
         finally:
             cursor.close()
@@ -239,7 +273,7 @@ class IncidentManager:
             # Get basic incident information
             cursor.execute("""
                 SELECT incident_id, incident_name, incident_type, ic_name,
-                       start_time, end_time, status, description,
+                       start_time, end_time, stage, description,
                        ST_X(center_point) as longitude, ST_Y(center_point) as latitude,
                        created_at, updated_at
                 FROM incidents 
@@ -422,7 +456,7 @@ class IncidentManager:
             cursor.execute("""
                 INSERT INTO incidents (
                     incident_id, incident_name, incident_type, ic_name, 
-                    start_time, status, center_point, description
+                    start_time, stage, center_point, description
                 ) VALUES (%s, %s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s)
                 RETURNING incident_id
             """, (
@@ -431,7 +465,7 @@ class IncidentManager:
                 incident_data['incident_type'],
                 incident_data['ic_name'],
                 datetime.now(),
-                'active',
+                'New',
                 float(incident_data['longitude']),
                 float(incident_data['latitude']),
                 incident_data.get('description', '')
@@ -674,6 +708,26 @@ def get_incidents():
         return jsonify({'success': True, 'incidents': incidents})
     except Exception as e:
         app.logger.error(f"Error getting incidents: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/incident/<incident_id>/stage', methods=['PUT'])
+def update_incident_stage(incident_id):
+    """Update incident stage"""
+    try:
+        data = request.json
+        new_stage = data.get('stage')
+        
+        if not new_stage:
+            return jsonify({'success': False, 'error': 'Stage is required'}), 400
+        
+        incident_mgr.update_incident_stage(incident_id, new_stage)
+        
+        return jsonify({'success': True, 'message': f'Incident stage updated to {new_stage}'})
+        
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        app.logger.error(f"Error updating incident stage: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/unit-checkin', methods=['POST'])
