@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Create necessary directories
-mkdir -p database/init database/backups static/qr_codes logs geoserver/workspaces geoserver/styles
+mkdir -p docker/database/init docker/database/backups docker/static/qr_codes docker/logs docker/geoserver/workspaces docker/geoserver/styles
 
 # Set external IP for QField access
 export EXTERNAL_IP=$(curl -s ifconfig.me)
