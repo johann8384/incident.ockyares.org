@@ -13,6 +13,7 @@ services:
     volumes:
       - ./docker/postgis_data:/var/lib/postgresql/data
       - ./docker/database/init:/docker-entrypoint-initdb.d
+      - ./docker/database/migrations:/docker-entrypoint-initdb.d/migrations
       - ./docker/database/backups:/backups
     ports:
       - "5432:5432"
