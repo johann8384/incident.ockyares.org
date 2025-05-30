@@ -46,9 +46,11 @@ CREATE INDEX IF NOT EXISTS idx_unit_status_updates_incident ON unit_status_updat
 CREATE INDEX IF NOT EXISTS idx_unit_status_updates_unit ON unit_status_updates(unit_id);
 CREATE INDEX IF NOT EXISTS idx_unit_status_updates_geom ON unit_status_updates USING GIST(location_point);
 
--- Add triggers for updated_at
-CREATE TRIGGER IF NOT EXISTS update_units_updated_at BEFORE UPDATE ON units
+-- Add triggers for updated_at (drop first if exists)
+DROP TRIGGER IF EXISTS update_units_updated_at ON units;
+CREATE TRIGGER update_units_updated_at BEFORE UPDATE ON units
     FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
 
-CREATE TRIGGER IF NOT EXISTS update_unit_status_updates_updated_at BEFORE UPDATE ON unit_status_updates
+DROP TRIGGER IF EXISTS update_unit_status_updates_updated_at ON unit_status_updates;
+CREATE TRIGGER update_unit_status_updates_updated_at BEFORE UPDATE ON unit_status_updates
     FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
