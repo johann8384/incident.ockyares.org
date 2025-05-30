@@ -175,12 +175,61 @@ function getStageClass(stage) {
 
 function getUnitStatusClass(status) {
     switch(status) {
-        case 'staging': return 'badge-secondary';
-        case 'assigned': return 'badge-warning';
-        case 'operating': return 'badge-primary';
-        case 'recovering': return 'badge-info';
-        case 'returned': return 'badge-success';
-        default: return 'badge-secondary';
+        case 'staging': 
+            return {
+                class: 'badge-secondary',
+                style: 'color: #000 !important; background-color: #e2e3e5 !important; border: 1px solid #d6d8db;'
+            };
+        case 'assigned': 
+            return {
+                class: 'badge-warning',
+                style: 'color: #000 !important; background-color: #fff3cd !important; border: 1px solid #ffeaa7;'
+            };
+        case 'operating': 
+            return {
+                class: 'badge-primary',
+                style: 'color: #fff !important; background-color: #007bff !important; border: 1px solid #0056b3;'
+            };
+        case 'recovering': 
+            return {
+                class: 'badge-info',
+                style: 'color: #000 !important; background-color: #d1ecf1 !important; border: 1px solid #bee5eb;'
+            };
+        case 'returned': 
+            return {
+                class: 'badge-success',
+                style: 'color: #000 !important; background-color: #d4edda !important; border: 1px solid #c3e6cb;'
+            };
+        default: 
+            return {
+                class: 'badge-secondary',
+                style: 'color: #000 !important; background-color: #e2e3e5 !important; border: 1px solid #d6d8db;'
+            };
+    }
+}
+
+function getEquipmentStatusClass(status) {
+    switch(status) {
+        case 'Operational': 
+            return {
+                class: 'badge-success',
+                style: 'color: #000 !important; background-color: #d4edda !important; border: 1px solid #c3e6cb;'
+            };
+        case 'Limited': 
+            return {
+                class: 'badge-warning',
+                style: 'color: #000 !important; background-color: #fff3cd !important; border: 1px solid #ffeaa7;'
+            };
+        case 'Non-operational': 
+            return {
+                class: 'badge-danger',
+                style: 'color: #fff !important; background-color: #dc3545 !important; border: 1px solid #c82333;'
+            };
+        default: 
+            return {
+                class: 'badge-secondary',
+                style: 'color: #000 !important; background-color: #e2e3e5 !important; border: 1px solid #d6d8db;'
+            };
     }
 }
 
@@ -287,8 +336,9 @@ function updateUnitStatus(unitId, newStatus) {
     .then(data => {
         console.log('Response data:', data);
         if (data.success) {
-            // Update the status display
-            statusElement.innerHTML = `<span class="badge ${getUnitStatusClass(newStatus)}">${newStatus}</span>`;
+            // Update the status display with proper styling
+            const unitStatusStyle = getUnitStatusClass(newStatus);
+            statusElement.innerHTML = `<span class="badge ${unitStatusStyle.class}" style="${unitStatusStyle.style}">${newStatus}</span>`;
             
             // Hide the edit form
             document.getElementById(`unit-${unitId}-edit-form`).style.display = 'none';
@@ -497,12 +547,8 @@ function displayUnits(units) {
         const unitStatus = unit.unit_status || 'staging';
         const checkinTime = unit.checkin_time ? new Date(unit.checkin_time).toLocaleString() : 'N/A';
         
-        const equipmentStatusBadge = equipmentStatus === 'Operational' ? 'badge-success' :
-                                   equipmentStatus === 'Limited' ? 'badge-warning' :
-                                   equipmentStatus === 'Non-operational' ? 'badge-danger' :
-                                   'badge-secondary';
-        
-        const unitStatusBadge = getUnitStatusClass(unitStatus);
+        const equipmentStatusStyle = getEquipmentStatusClass(equipmentStatus);
+        const unitStatusStyle = getUnitStatusClass(unitStatus);
         
         html += `
             <div class="list-group-item">
@@ -513,9 +559,9 @@ function displayUnits(units) {
                 <div class="mb-2">
                     <strong>Officer:</strong> ${officerName}<br/>
                     <strong>Personnel:</strong> ${personnelCount}<br/>
-                    <strong>Equipment:</strong> <span class="badge ${equipmentStatusBadge}">${equipmentStatus}</span><br/>
+                    <strong>Equipment:</strong> <span class="badge ${equipmentStatusStyle.class}" style="${equipmentStatusStyle.style}">${equipmentStatus}</span><br/>
                     <strong>Status:</strong> 
-                    <span id="unit-${unitId}-status" class="badge ${unitStatusBadge}">${unitStatus}</span>
+                    <span id="unit-${unitId}-status" class="badge ${unitStatusStyle.class}" style="${unitStatusStyle.style}">${unitStatus}</span>
                     <button class="btn btn-sm btn-outline-secondary ml-2" onclick="toggleUnitStatusEdit('${unitId}', '${unitStatus}')">
                         <i class="fas fa-edit"></i> Edit
                     </button>
