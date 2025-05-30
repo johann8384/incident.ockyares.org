@@ -1,0 +1,117 @@
+version: '3.8'
+
+services:
+  # PostGIS Database
+  postgis:
+    image: postgis/postgis:15-3.3
+    container_name: fresh_postgis
+    environment:
+      POSTGRES_DB: incident_app
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_password
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
+    volumes:
+      - postgis_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    networks:
+      - app_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d incident_app"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # PostgREST API
+  postgrest:
+    image: postgrest/postgrest:v12.0.2
+    container_name: fresh_postgrest
+    environment:
+      PGRST_DB_URI: postgresql://postgres:postgres_password@postgis:5432/incident_app
+      PGRST_DB_SCHEMA: public
+      PGRST_DB_ANON_ROLE: web_anon
+      PGRST_JWT_SECRET: "your-256-bit-secret-key-for-jwt-tokens-should-be-long-enough"
+      PGRST_DB_POOL: 10
+      PGRST_DB_POOL_TIMEOUT: 10
+    ports:
+      - "3000:3000"
+    networks:
+      - app_network
+    depends_on:
+      postgis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Flask Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: fresh_backend
+    environment:
+      DB_HOST: postgis
+      DB_PORT: 5432
+      DB_NAME: incident_app
+      DB_USER: postgres
+      DB_PASSWORD: postgres_password
+      FLASK_ENV: development
+    volumes:
+      - ./backend:/app
+    ports:
+      - "5000:5000"
+    networks:
+      - app_network
+    depends_on:
+      postgis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # React Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: fresh_frontend
+    environment:
+      - REACT_APP_API_URL=http://localhost:5000
+      - REACT_APP_POSTGREST_URL=http://localhost:3000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "3001:3000"
+    networks:
+      - app_network
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: fresh_nginx
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "80:80"
+    networks:
+      - app_network
+    depends_on:
+      - backend
+      - frontend
+      - postgrest
+    restart: unless-stopped
+
+volumes:
+  postgis_data:
+
+networks:
+  app_network:
+    driver: bridge
