@@ -1,0 +1,26 @@
+                <div class="d-flex justify-content-between">
+                    <small class="text-muted">
+                        ${unit.latitude && unit.longitude ? 
+                            `Location: ${unit.latitude.toFixed(4)}, ${unit.longitude.toFixed(4)}` : 
+                            'No location data'}
+                        ${unit.assigned_division ? ` | Division: ${unit.assigned_division}` : ''}
+                        ${unit.latest_progress_percentage !== null && unit.latest_progress_percentage !== undefined ? 
+                            ` | Progress: ${unit.latest_progress_percentage}%` : ''}
+                        ${unit.need_assistance ? ' | ⚠️ NEEDS ASSISTANCE' : ''}
+                        ${unit.latest_comment ? ` | Latest: ${unit.latest_comment}` : ''}
+                        ${unit.latest_update_time ? ` | Updated: ${new Date(unit.latest_update_time).toLocaleString()}` : ''}
+                    </small>
+                    <div>
+                        ${unit.photo_path ? 
+                            `<a href="${unit.photo_path}" target="_blank" class="btn btn-sm btn-outline-info me-2" title="View Photo">
+                                <i class="fas fa-camera"></i>
+                            </a>` : 
+                            ''}
+                        <a href="/unit-status-update" class="btn btn-sm btn-success me-2" title="Submit Status Update">
+                            <i class="fas fa-clipboard-check"></i> Update
+                        </a>
+                        <a href="#" onclick="generateUnitQR('${unitId}', '${officerName}')" class="btn btn-sm btn-outline-primary" title="Generate QR Code">
+                            <i class="fas fa-qrcode"></i>
+                        </a>
+                    </div>
+                </div>
