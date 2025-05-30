@@ -67,6 +67,131 @@ class IncidentManager:
         except Exception as e:
             app.logger.error(f"Database health check failed: {e}")
             return False
+
+    def get_active_incidents(self):
+        """Get list of active incidents for dropdown"""
+        conn = self.connect_db()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        
+        try:
+            cursor.execute("""
+                SELECT incident_id, incident_name, incident_type, start_time
+                FROM incidents 
+                WHERE status = 'active'
+                ORDER BY start_time DESC
+            """)
+            
+            incidents = []
+            for incident in cursor.fetchall():
+                incident_dict = dict(incident)
+                if incident_dict['start_time']:
+                    incident_dict['start_time'] = incident_dict['start_time'].isoformat()
+                incidents.append(incident_dict)
+            
+            app.logger.info(f"Retrieved {len(incidents)} active incidents")
+            return incidents
+            
+        except Exception as e:
+            app.logger.error(f"Failed to get active incidents: {e}")
+            raise e
+        finally:
+            cursor.close()
+            self.close_db()
+
+    def submit_unit_checkin(self, checkin_data):
+        """Submit unit check-in data"""
+        conn = self.connect_db()
+        cursor = conn.cursor()
+        
+        try:
+            # Insert into units table (create if doesn't exist)
+            cursor.execute("""
+                INSERT INTO unit_checkins (
+                    incident_id, unit_id, officer_name, personnel_count,
+                    equipment_status, location_point, photo_path, checkin_time
+                ) VALUES (%s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s, %s)
+                RETURNING id
+            """, (
+                checkin_data['incident_id'],
+                checkin_data['unit_id'],
+                checkin_data['officer_name'],
+                int(checkin_data['personnel_count']),
+                checkin_data['equipment_status'],
+                float(checkin_data['longitude']) if checkin_data.get('longitude') else None,
+                float(checkin_data['latitude']) if checkin_data.get('latitude') else None,
+                checkin_data.get('photo_path'),
+                datetime.now()
+            ))
+            
+            checkin_id = cursor.fetchone()[0]
+            conn.commit()
+            
+            app.logger.info(f"Unit {checkin_data['unit_id']} checked in for incident {checkin_data['incident_id']}")
+            return checkin_id
+            
+        except Exception as e:
+            conn.rollback()
+            app.logger.error(f"Failed to submit unit check-in: {e}")
+            raise e
+        finally:
+            cursor.close()
+            self.close_db()
+
+    def get_available_assignment(self, incident_id):
+        """Get an available assignment for a unit"""
+        conn = self.connect_db()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        
+        try:
+            # Find unassigned division with highest priority
+            cursor.execute("""
+                SELECT division_id, division_name, priority, search_type,
+                       estimated_duration, ST_AsGeoJSON(geom) as geometry
+                FROM search_divisions 
+                WHERE incident_id = %s AND status = 'unassigned'
+                ORDER BY priority ASC, division_id ASC
+                LIMIT 1
+            """, (incident_id,))
+            
+            assignment = cursor.fetchone()
+            if assignment:
+                assignment_dict = dict(assignment)
+                if assignment_dict['geometry']:
+                    assignment_dict['geometry'] = json.loads(assignment_dict['geometry'])
+                return assignment_dict
+            
+            return None
+            
+        except Exception as e:
+            app.logger.error(f"Failed to get available assignment: {e}")
+            raise e
+        finally:
+            cursor.close()
+            self.close_db()
+
+    def assign_unit_to_division(self, incident_id, unit_id, division_id, officer_name):
+        """Assign a unit to a specific division"""
+        conn = self.connect_db()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                UPDATE search_divisions 
+                SET assigned_team = %s, team_leader = %s, status = 'assigned'
+                WHERE incident_id = %s AND division_id = %s
+            """, (unit_id, officer_name, incident_id, division_id))
+            
+            conn.commit()
+            app.logger.info(f"Unit {unit_id} assigned to division {division_id}")
+            return True
+            
+        except Exception as e:
+            conn.rollback()
+            app.logger.error(f"Failed to assign unit to division: {e}")
+            raise e
+        finally:
+            cursor.close()
+            self.close_db()
     
     def get_incident_details(self, incident_id):
         """Get incident details including geospatial data"""
@@ -499,6 +624,69 @@ def health_check():
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/unit-checkin')
+def unit_checkin():
+    """Mobile unit check-in page"""
+    return render_template('unit_checkin.html')
+
+@app.route('/api/incidents')
+def get_incidents():
+    """API endpoint to get active incidents"""
+    try:
+        incidents = incident_mgr.get_active_incidents()
+        return jsonify({'success': True, 'incidents': incidents})
+    except Exception as e:
+        app.logger.error(f"Error getting incidents: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/unit-checkin', methods=['POST'])
+def submit_unit_checkin():
+    """Submit unit check-in"""
+    try:
+        data = request.json
+        
+        # Validate required fields
+        required_fields = ['incident_id', 'unit_id', 'officer_name', 'personnel_count', 'equipment_status']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({'success': False, 'error': f'{field} is required'}), 400
+        
+        # Save photo if provided
+        photo_path = None
+        if 'photo' in request.files:
+            photo = request.files['photo']
+            if photo.filename:
+                filename = f"unit_{data['unit_id']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+                photo_path = os.path.join('static', 'unit_photos', filename)
+                os.makedirs(os.path.dirname(photo_path), exist_ok=True)
+                photo.save(photo_path)
+                data['photo_path'] = photo_path
+        
+        # Submit check-in
+        checkin_id = incident_mgr.submit_unit_checkin(data)
+        
+        # Get available assignment
+        assignment = incident_mgr.get_available_assignment(data['incident_id'])
+        
+        # Assign unit to division if available
+        if assignment:
+            incident_mgr.assign_unit_to_division(
+                data['incident_id'], 
+                data['unit_id'], 
+                assignment['division_id'],
+                data['officer_name']
+            )
+        
+        return jsonify({
+            'success': True,
+            'checkin_id': checkin_id,
+            'assignment': assignment
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Error submitting unit check-in: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/create_incident', methods=['POST'])
 def create_incident():
