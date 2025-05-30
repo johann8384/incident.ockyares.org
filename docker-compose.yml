@@ -93,6 +93,7 @@ services:
       EXTERNAL_DB_HOST: ${EXTERNAL_IP:-localhost}
       FLASK_ENV: production
     volumes:
+      - ./app.py:/app/app.py
       - ./static/qr_codes:/app/static/qr_codes
       - ./logs:/app/logs
       - ./templates:/app/templates

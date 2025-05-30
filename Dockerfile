@@ -42,9 +42,6 @@ RUN pip install --no-cache-dir --upgrade pip==23.3.1 && \
     pip install --no-cache-dir -r requirements.txt && \
     pip check
 
-# Copy application code
-COPY --chown=appuser:appuser . .
-
 # Create directories with proper permissions
 RUN mkdir -p /app/static/qr_codes /app/logs && \
     chown -R appuser:appuser /app && \
