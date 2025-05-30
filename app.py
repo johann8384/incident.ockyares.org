@@ -68,6 +68,185 @@ class IncidentManager:
             app.logger.error(f"Database health check failed: {e}")
             return False
     
+    def get_incident_details(self, incident_id):
+        """Get incident details including geospatial data"""
+        conn = self.connect_db()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        
+        try:
+            # Get basic incident information
+            cursor.execute("""
+                SELECT incident_id, incident_name, incident_type, ic_name,
+                       start_time, end_time, status, description,
+                       ST_X(center_point) as longitude, ST_Y(center_point) as latitude,
+                       created_at, updated_at
+                FROM incidents 
+                WHERE incident_id = %s
+            """, (incident_id,))
+            
+            incident = cursor.fetchone()
+            if not incident:
+                return None
+            
+            # Convert datetime objects to strings for JSON serialization
+            if incident['start_time']:
+                incident['start_time'] = incident['start_time'].isoformat()
+            if incident['end_time']:
+                incident['end_time'] = incident['end_time'].isoformat()
+            if incident['created_at']:
+                incident['created_at'] = incident['created_at'].isoformat()
+            if incident['updated_at']:
+                incident['updated_at'] = incident['updated_at'].isoformat()
+            
+            # Get search areas
+            cursor.execute("""
+                SELECT id, area_name, area_type, priority,
+                       ST_AsGeoJSON(geom) as geometry
+                FROM search_areas 
+                WHERE incident_id = %s
+                ORDER BY priority
+            """, (incident_id,))
+            
+            search_areas = []
+            for area in cursor.fetchall():
+                area_dict = dict(area)
+                area_dict['geometry'] = json.loads(area_dict['geometry'])
+                search_areas.append(area_dict)
+            
+            incident['search_areas'] = search_areas
+            
+            app.logger.info(f"Retrieved incident details for {incident_id}")
+            return dict(incident)
+            
+        except Exception as e:
+            app.logger.error(f"Failed to get incident details: {e}")
+            raise e
+        finally:
+            cursor.close()
+            self.close_db()
+    
+    def get_incident_divisions(self, incident_id):
+        """Get all divisions for an incident"""
+        conn = self.connect_db()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        
+        try:
+            cursor.execute("""
+                SELECT id, division_id, division_name, assigned_team, team_leader,
+                       priority, search_type, estimated_duration, status,
+                       created_at, updated_at,
+                       ST_AsGeoJSON(geom) as geometry
+                FROM search_divisions 
+                WHERE incident_id = %s
+                ORDER BY division_id
+            """, (incident_id,))
+            
+            divisions = []
+            for division in cursor.fetchall():
+                div_dict = dict(division)
+                if div_dict['geometry']:
+                    div_dict['geometry'] = json.loads(div_dict['geometry'])
+                if div_dict['created_at']:
+                    div_dict['created_at'] = div_dict['created_at'].isoformat()
+                if div_dict['updated_at']:
+                    div_dict['updated_at'] = div_dict['updated_at'].isoformat()
+                divisions.append(div_dict)
+            
+            app.logger.info(f"Retrieved {len(divisions)} divisions for incident {incident_id}")
+            return divisions
+            
+        except Exception as e:
+            app.logger.error(f"Failed to get incident divisions: {e}")
+            raise e
+        finally:
+            cursor.close()
+            self.close_db()
+    
+    def get_incident_qr_codes(self, incident_id):
+        """Get QR codes for teams assigned to incident"""
+        try:
+            # Get unique teams from divisions
+            divisions = self.get_incident_divisions(incident_id)
+            teams = {}
+            
+            for division in divisions:
+                if division['assigned_team'] and division['team_leader']:
+                    team_id = division['assigned_team'].lower().replace(' ', '_')
+                    if team_id not in teams:
+                        teams[team_id] = {
+                            'team_id': team_id,
+                            'team_name': division['assigned_team'],
+                            'team_leader': division['team_leader']
+                        }
+            
+            # Check if QR codes already exist, if not generate them
+            qr_codes = {}
+            for team_id, team_info in teams.items():
+                qr_filename = f"qr_{incident_id}_{team_id}.png"
+                qr_path = os.path.join('static', 'qr_codes', qr_filename)
+                
+                if os.path.exists(qr_path):
+                    # Load existing QR code
+                    with open(qr_path, 'rb') as f:
+                        qr_base64 = base64.b64encode(f.read()).decode()
+                    
+                    qr_codes[team_id] = {
+                        'team_name': team_info['team_name'],
+                        'team_leader': team_info['team_leader'],
+                        'qr_code': qr_base64,
+                        'qr_file': qr_filename
+                    }
+                else:
+                    # Generate new QR code
+                    project_config = {
+                        'incident_id': incident_id,
+                        'team_id': team_id,
+                        'team_name': team_info['team_name'],
+                        'team_leader': team_info['team_leader'],
+                        'project_url': f'https://cloud.qfield.org/projects/{incident_id}_{team_id}',
+                        'check_in_frequency': 15,
+                        'emergency_contact': '+1-555-COMMAND',
+                        'database_config': {
+                            'host': os.getenv('EXTERNAL_DB_HOST', DB_CONFIG['host']),
+                            'database': DB_CONFIG['database'],
+                            'username': f"team_{team_id}",
+                            'filter': f"assigned_team = '{team_info['team_name']}'"
+                        }
+                    }
+                    
+                    # Generate QR code
+                    qr = qrcode.QRCode(version=1, box_size=10, border=5)
+                    qr.add_data(json.dumps(project_config))
+                    qr.make(fit=True)
+                    
+                    # Create QR code image
+                    qr_image = qr.make_image(fill_color="black", back_color="white")
+                    
+                    # Save QR code to file
+                    os.makedirs(os.path.dirname(qr_path), exist_ok=True)
+                    qr_image.save(qr_path)
+                    
+                    # Convert to base64 for web display
+                    buffer = BytesIO()
+                    qr_image.save(buffer, format='PNG')
+                    buffer.seek(0)
+                    qr_base64 = base64.b64encode(buffer.getvalue()).decode()
+                    
+                    qr_codes[team_id] = {
+                        'team_name': team_info['team_name'],
+                        'team_leader': team_info['team_leader'],
+                        'qr_code': qr_base64,
+                        'qr_file': qr_filename,
+                        'config': project_config
+                    }
+            
+            app.logger.info(f"Retrieved/generated {len(qr_codes)} QR codes for incident {incident_id}")
+            return qr_codes
+            
+        except Exception as e:
+            app.logger.error(f"Failed to get incident QR codes: {e}")
+            raise e
+    
     def create_incident(self, incident_data):
         """Create new incident record"""
         conn = self.connect_db()
@@ -375,6 +554,35 @@ def create_incident():
 def view_incident(incident_id):
     """View incident details and QR codes"""
     return render_template('incident_view.html', incident_id=incident_id)
+
+@app.route('/api/incident/<incident_id>')
+def get_incident_data(incident_id):
+    """API endpoint to get complete incident data for frontend"""
+    try:
+        # Get incident details
+        incident = incident_mgr.get_incident_details(incident_id)
+        if not incident:
+            return jsonify({'success': False, 'error': 'Incident not found'}), 404
+        
+        # Get divisions
+        divisions = incident_mgr.get_incident_divisions(incident_id)
+        
+        # Get QR codes
+        qr_codes = incident_mgr.get_incident_qr_codes(incident_id)
+        
+        return jsonify({
+            'success': True,
+            'incident': incident,
+            'divisions': divisions,
+            'qr_codes': qr_codes
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Error getting incident data for {incident_id}: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 @app.route('/qr/<filename>')
 def get_qr_code(filename):
