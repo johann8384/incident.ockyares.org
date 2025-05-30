@@ -930,7 +930,7 @@ def unit_checkin():
     """Mobile unit check-in page"""
     return render_template('unit_checkin.html')
 
-@app.route('/api/geocode', methods=['POST'])
+@app.route('/app/geocode', methods=['POST'])
 def geocode_location():
     """API endpoint for reverse geocoding coordinates"""
     try:
@@ -953,7 +953,7 @@ def geocode_location():
             'error': 'Geocoding service error'
         }), 500
 
-@app.route('/api/incidents')
+@app.route('/app/incidents')
 def get_incidents():
     """API endpoint to get active incidents"""
     try:
@@ -963,7 +963,7 @@ def get_incidents():
         app.logger.error(f"Error getting incidents: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
-@app.route('/api/incident/<incident_id>/stage', methods=['PUT'])
+@app.route('/app/incident/<incident_id>/stage', methods=['PUT'])
 def update_incident_stage(incident_id):
     """Update incident stage"""
     try:
@@ -983,7 +983,7 @@ def update_incident_stage(incident_id):
         app.logger.error(f"Error updating incident stage: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
-@app.route('/api/incident/<incident_id>/unit/<unit_id>/status', methods=['PUT'])
+@app.route('/app/incident/<incident_id>/unit/<unit_id>/status', methods=['PUT'])
 def update_unit_status(incident_id, unit_id):
     """Update unit status"""
     try:
@@ -1003,7 +1003,7 @@ def update_unit_status(incident_id, unit_id):
         app.logger.error(f"Error updating unit status: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
-@app.route('/api/unit-checkin', methods=['POST'])
+@app.route('/app/unit-checkin', methods=['POST'])
 def submit_unit_checkin():
     """Submit unit check-in"""
     try:
@@ -1106,7 +1106,7 @@ def view_incident(incident_id):
     """View incident details and QR codes"""
     return render_template('incident_view.html', incident_id=incident_id)
 
-@app.route('/api/incident/<incident_id>')
+@app.route('/app/incident/<incident_id>')
 def get_incident_data(incident_id):
     """API endpoint to get complete incident data for frontend"""
     try:
