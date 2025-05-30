@@ -1,0 +1,26 @@
+{
+  "security": {
+    "ignore-cvs": [],
+    "ignore-vulnerabilities": [],
+    "continue-on-error": false,
+    "audit-and-monitor": true
+  },
+  "alert": {
+    "ignore-unpinned-requirements": false,
+    "ignore-unpinned-requirements-filenames": [
+      "requirements-dev.txt"
+    ]
+  },
+  "report": {
+    "only-report": false,
+    "output": [
+      {
+        "type": "screen"
+      },
+      {
+        "type": "json",
+        "target": "safety-report.json"
+      }
+    ]
+  }
+}

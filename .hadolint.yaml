@@ -1,0 +1,26 @@
+version: "2.12.0"
+
+failure-threshold: warning
+
+override:
+  info:
+    - DL3008  # Pin versions in apt get install
+    - DL3009  # Delete apt cache
+  warning:
+    - DL3018  # Pin versions in apk add
+  error:
+    - DL3001  # Switching to root user
+    - DL3002  # Last USER should not be root
+    - DL3025  # Use COPY instead of ADD for files and folders
+
+ignored:
+  - DL3059  # Multiple consecutive RUN instructions (optimization for layer caching)
+
+trustedRegistries:
+  - docker.io
+  - gcr.io
+  - quay.io
+
+label-schema:
+  maintainer: text
+  version: semver

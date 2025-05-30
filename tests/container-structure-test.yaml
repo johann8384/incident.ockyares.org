@@ -1,0 +1,63 @@
+schemaVersion: 2.0.0
+
+commandTests:
+  - name: "Python version check"
+    command: "python"
+    args: ["--version"]
+    expectedOutput: ["Python 3.11.*"]
+  
+  - name: "App user exists"
+    command: "id"
+    args: ["appuser"]
+    expectedOutput: ["uid=1000.*gid=1000.*groups=1000"]
+  
+  - name: "Working directory is /app"
+    command: "pwd"
+    expectedOutput: ["/app"]
+  
+  - name: "Flask app can import"
+    command: "python"
+    args: ["-c", "import app; print('OK')"]
+    expectedOutput: ["OK"]
+
+fileExistenceTests:
+  - name: "Application file"
+    path: "/app/app.py"
+    shouldExist: true
+  
+  - name: "Requirements file"
+    path: "/app/requirements.txt"
+    shouldExist: true
+  
+  - name: "QR codes directory"
+    path: "/app/static/qr_codes"
+    shouldExist: true
+    isDirectory: true
+  
+  - name: "Logs directory"
+    path: "/app/logs"
+    shouldExist: true
+    isDirectory: true
+
+fileContentTests:
+  - name: "Non-root user"
+    path: "/etc/passwd"
+    expectedContents: ["appuser:x:1000:1000:.*"]
+  
+  - name: "Python path"
+    path: "/app/app.py"
+    expectedContents: ["Flask"]
+
+metadataTest:
+  exposedPorts: ["5000"]
+  
+  labels:
+    - key: "maintainer"
+      value: "Emergency Response Team <emergency@ockyeoc.org>"
+    - key: "version"
+      value: "1.0"
+
+  user: "appuser"
+  workdir: "/app"
+  
+  cmd: ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--worker-class", "sync", "--timeout", "120", "--keepalive", "5", "--max-requests", "1000", "--max-requests-jitter", "100", "--preload", "--access-logfile", "-", "--error-logfile", "-", "--log-level", "info", "app:app"]
