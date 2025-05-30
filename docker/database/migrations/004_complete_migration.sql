@@ -175,7 +175,10 @@ BEGIN
 END $$;
 
 -- 5. Verification - show what we have now
-RAISE NOTICE 'Migration complete! Verifying database schema...';
+DO $$
+BEGIN
+    RAISE NOTICE 'Migration complete! Verifying database schema...';
+END $$;
 
 -- Show all tables
 SELECT table_name, 
