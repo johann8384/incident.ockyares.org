@@ -162,6 +162,7 @@
         let incidentLocation = null;
         let drawingPoints = [];
         let currentDrawingLine = null;
+        let searchAreaPolygon = null;
         
         // Initialize map
         function initMap() {
@@ -380,18 +381,19 @@
             searchAreaLayer.clearLayers();
             
             // Create the final polygon
-            const polygon = L.polygon(drawingPoints, {
+            searchAreaPolygon = L.polygon(drawingPoints, {
                 color: '#dc3545',
                 weight: 3,
                 fillOpacity: 0.2,
                 fillColor: '#dc3545'
             }).addTo(searchAreaLayer);
             
-            polygon.bindPopup('<b>Search Area</b><br>Primary search zone');
+            searchAreaPolygon.bindPopup('<b>Search Area</b><br>Primary search zone');
             
             // Reset drawing state
             isDrawMode = false;
             hasSearchArea = true;
+            const savedPoints = [...drawingPoints]; // Save points for division generation
             drawingPoints = [];
             currentDrawingLine = null;
             
@@ -416,6 +418,7 @@
             isDrawMode = false;
             drawingPoints = [];
             currentDrawingLine = null;
+            searchAreaPolygon = null;
             
             // Reset button
             const btn = document.getElementById('drawAreaBtn');
@@ -475,23 +478,146 @@
             }
         }
         
-        // Generate divisions
+        // Generate divisions and display on map
         async function generateDivisions() {
-            // TODO: Implement division generation
-            showStatus('Division generation will be implemented when backend is ready', 'success');
+            if (!searchAreaPolygon) {
+                showStatus('Please create a search area first', 'error');
+                return;
+            }
             
-            // Mock divisions display
-            const info = document.getElementById('divisionsInfo');
-            const details = document.getElementById('divisionsDetails');
+            try {
+                // Clear existing divisions
+                divisionsGroup.clearLayers();
+                
+                // Get search area bounds
+                const bounds = searchAreaPolygon.getBounds();
+                const searchAreaCoords = searchAreaPolygon.getLatLngs()[0];
+                
+                // Create mock divisions for demonstration
+                // In production, this would call the backend API
+                const divisions = createMockDivisions(searchAreaCoords, bounds);
+                
+                // Display divisions on map
+                divisions.forEach((division, index) => {
+                    const colors = [
+                        '#198754', // success - assigned
+                        '#198754', // success - assigned  
+                        '#ffc107', // warning - unassigned
+                        '#17a2b8'  // info - completed
+                    ];
+                    const color = colors[index % colors.length];
+                    
+                    const divisionPolygon = L.polygon(division.coordinates, {
+                        color: color,
+                        weight: 2,
+                        fillOpacity: 0.4,
+                        fillColor: color
+                    }).addTo(divisionsGroup);
+                    
+                    // Add label in center of division
+                    const center = divisionPolygon.getBounds().getCenter();
+                    const label = L.marker(center, {
+                        icon: L.divIcon({
+                            className: 'division-label',
+                            html: `<div style="background: white; border: 2px solid ${color}; border-radius: 50%; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px;">${division.name}</div>`,
+                            iconSize: [30, 30],
+                            iconAnchor: [15, 15]
+                        })
+                    }).addTo(divisionsGroup);
+                    
+                    divisionPolygon.bindPopup(`
+                        <b>${division.division_name}</b><br>
+                        <strong>Status:</strong> ${division.status}<br>
+                        <strong>Team:</strong> ${division.team || 'Not assigned'}<br>
+                        <strong>Area:</strong> ~${division.area_size}<br>
+                        <strong>Priority:</strong> ${division.priority}
+                    `);
+                    
+                    label.bindPopup(`
+                        <b>${division.division_name}</b><br>
+                        <strong>Status:</strong> ${division.status}<br>
+                        <strong>Team:</strong> ${division.team || 'Not assigned'}<br>
+                        <strong>Area:</strong> ~${division.area_size}<br>
+                        <strong>Priority:</strong> ${division.priority}
+                    `);
+                });
+                
+                showStatus(`Generated ${divisions.length} search divisions and displayed on map`, 'success');
+                
+                // Display divisions info
+                const info = document.getElementById('divisionsInfo');
+                const details = document.getElementById('divisionsDetails');
+                
+                details.innerHTML = `
+                    <div class="row g-2">
+                        <div class="col-sm-4"><strong>Divisions Created:</strong> ${divisions.length}</div>
+                        <div class="col-sm-8"><strong>Coverage:</strong> Optimized for 4-person teams (~40,000 m² per division)</div>
+                        <div class="col-12"><strong>Strategy:</strong> Grid-based divisions within search area polygon</div>
+                        <div class="col-12">
+                            <small class="text-muted">
+                                <i class="bi bi-info-circle me-1"></i>
+                                Divisions are displayed on the map with different colors: 
+                                <span class="badge bg-success">Assigned</span>
+                                <span class="badge bg-warning text-dark">Unassigned</span>
+                                <span class="badge bg-info">Completed</span>
+                            </small>
+                        </div>
+                    </div>
+                `;
+                info.classList.remove('d-none');
+                
+            } catch (error) {
+                showStatus('Error generating divisions: ' + error.message, 'error');
+            }
+        }
+        
+        // Create mock divisions (replace with real API call)
+        function createMockDivisions(searchAreaCoords, bounds) {
+            const divisions = [];
+            const divisionNames = ['A', 'B', 'C', 'D'];
+            const teams = ['Team Alpha', 'Team Bravo', null, 'Team Charlie'];
+            const statuses = ['assigned', 'assigned', 'unassigned', 'completed'];
+            const priorities = ['High', 'High', 'Medium', 'Low'];
             
-            details.innerHTML = `
-                <div class="row g-2">
-                    <div class="col-sm-4"><strong>Divisions Created:</strong> 4</div>
-                    <div class="col-sm-8"><strong>Coverage:</strong> Optimized for 4-person teams (40,000 m² per division)</div>
-                    <div class="col-12"><strong>Strategy:</strong> Aligned with road network for systematic search</div>
-                </div>
-            `;
-            info.classList.remove('d-none');
+            // Create a simple grid within the search area
+            const centerLat = bounds.getCenter().lat;
+            const centerLng = bounds.getCenter().lng;
+            const latSpan = bounds.getNorth() - bounds.getSouth();
+            const lngSpan = bounds.getEast() - bounds.getWest();
+            
+            // Create 4 quadrants
+            for (let i = 0; i < 4; i++) {
+                const isTop = i < 2;
+                const isLeft = i % 2 === 0;
+                
+                const latOffset = isTop ? latSpan * 0.25 : -latSpan * 0.25;
+                const lngOffset = isLeft ? -lngSpan * 0.25 : lngSpan * 0.25;
+                
+                const divCenter = [centerLat + latOffset, centerLng + lngOffset];
+                const size = Math.min(latSpan, lngSpan) * 0.3;
+                
+                // Create rectangle around the center point
+                const coordinates = [
+                    [divCenter[0] - size/2, divCenter[1] - size/2],
+                    [divCenter[0] + size/2, divCenter[1] - size/2],
+                    [divCenter[0] + size/2, divCenter[1] + size/2],
+                    [divCenter[0] - size/2, divCenter[1] + size/2],
+                    [divCenter[0] - size/2, divCenter[1] - size/2]
+                ];
+                
+                divisions.push({
+                    division_id: `DIV-${divisionNames[i]}`,
+                    division_name: `Division ${divisionNames[i]}`,
+                    name: divisionNames[i],
+                    coordinates: coordinates,
+                    status: statuses[i],
+                    team: teams[i],
+                    area_size: `~${(40000 + Math.random() * 10000).toFixed(0)} m²`,
+                    priority: priorities[i]
+                });
+            }
+            
+            return divisions;
         }
         
         // Event listeners
