@@ -1,0 +1,26 @@
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    postgresql-client \
+    libpq-dev \
+    gcc \
+    g++ \
+    libgdal-dev \
+    gdal-bin \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy requirements
+COPY requirements.txt test-requirements.txt ./
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r test-requirements.txt
+
+# Copy source code
+COPY . .
+
+# Run tests by default
+CMD ["python", "-m", "pytest", "tests/", "-v", "--cov=app", "--cov=models", "--cov-report=html", "--cov-report=term-missing"]
