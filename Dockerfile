@@ -26,10 +26,8 @@ WORKDIR /app
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Install Python dependencies with explicit NumPy constraint
+# Install Python dependencies (NumPy 2.x compatible)
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir "numpy>=1.24.0,<2.0.0" && \
-    pip install --no-cache-dir --no-deps pandas && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
