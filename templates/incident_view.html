@@ -50,6 +50,18 @@
                         <!-- Status Messages -->
                         <div id="status" class="alert d-none" role="alert"></div>
                         
+                        <!-- Hospital Information Alert (Hidden by default) -->
+                        <div id="hospitalAlert" class="alert alert-info alert-dismissible d-none" role="alert">
+                            <div class="d-flex align-items-start">
+                                <i class="bi bi-hospital me-2 mt-1"></i>
+                                <div>
+                                    <h6 class="alert-heading mb-2">Nearby Medical Facilities</h6>
+                                    <div id="hospitalList">Loading hospital information...</div>
+                                </div>
+                            </div>
+                            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                        </div>
+                        
                         <!-- Loading -->
                         <div id="loadingDiv" class="text-center py-5">
                             <div class="spinner-border text-primary" role="status">
@@ -71,6 +83,11 @@
                                         </div>
                                         <div class="card-body">
                                             <div id="incidentInfo"></div>
+                                            <div class="mt-3">
+                                                <button class="btn btn-outline-info btn-sm" id="showHospitalsBtn">
+                                                    <i class="bi bi-hospital me-2"></i>Show Nearby Hospitals
+                                                </button>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -214,74 +231,22 @@
             }, 5000);
         }
         
-        // Load incident data (mock data since API endpoints for viewing aren't implemented yet)
+        // Load incident data from API
         async function loadIncidentData() {
             try {
-                // For now, create mock data since the view API isn't implemented
-                // In production, this would be: const response = await fetch(`/api/incident/${incidentId}`);
+                const response = await fetch(`/api/incident/${incidentId}`);
                 
-                const mockData = {
-                    incident_id: incidentId,
-                    name: "Mock Building Collapse Incident",
-                    incident_type: "Building Collapse",
-                    description: "This is a demonstration incident showing the incident management interface. Real data would be loaded from the API.",
-                    status: "active",
-                    created_at: new Date().toISOString(),
-                    location: {
-                        latitude: 38.3960874,
-                        longitude: -85.4425145,
-                        address: "Louisville, KY, USA"
-                    },
-                    search_area: {
-                        coordinates: [
-                            [-85.450, 38.390],
-                            [-85.435, 38.390],
-                            [-85.435, 38.402],
-                            [-85.450, 38.402],
-                            [-85.450, 38.390]
-                        ]
-                    },
-                    divisions: [
-                        {
-                            id: 1,
-                            division_id: "DIV-A",
-                            name: "Division Alpha",
-                            status: "assigned",
-                            team: "Team 1",
-                            area_size: "40,000 m²",
-                            priority: "High"
-                        },
-                        {
-                            id: 2,
-                            division_id: "DIV-B", 
-                            name: "Division Bravo",
-                            status: "assigned",
-                            team: "Team 2",
-                            area_size: "38,500 m²",
-                            priority: "High"
-                        },
-                        {
-                            id: 3,
-                            division_id: "DIV-C",
-                            name: "Division Charlie",
-                            status: "unassigned",
-                            team: null,
-                            area_size: "42,000 m²",
-                            priority: "Medium"
-                        },
-                        {
-                            id: 4,
-                            division_id: "DIV-D",
-                            name: "Division Delta",
-                            status: "completed",
-                            team: "Team 3",
-                            area_size: "39,000 m²",
-                            priority: "Low"
-                        }
-                    ]
-                };
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
                 
-                incidentData = mockData;
+                const data = await response.json();
+                
+                if (!data.success) {
+                    throw new Error(data.error || 'Failed to load incident data');
+                }
+                
+                incidentData = data.incident;
                 displayIncidentData();
                 updateMap();
                 
@@ -289,10 +254,88 @@
                 showStatus('Error loading incident data: ' + error.message, 'error');
                 document.getElementById('loadingDiv').innerHTML = `
                     <div class="alert alert-danger">
-                        <i class="bi bi-exclamation-triangle me-2"></i>Error loading incident data
+                        <i class="bi bi-exclamation-triangle me-2"></i>Error loading incident data: ${error.message}
                     </div>
                 `;
             }
+        }
+        
+        // Load hospital data
+        async function loadHospitalData() {
+            if (!incidentData || !incidentData.latitude || !incidentData.longitude) {
+                showStatus('Location data required for hospital search', 'error');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/hospitals/search', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        latitude: incidentData.latitude,
+                        longitude: incidentData.longitude
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success && data.hospitals) {
+                    displayHospitalData(data.hospitals);
+                } else {
+                    document.getElementById('hospitalList').innerHTML = 'No hospital data available for this location.';
+                }
+                
+                // Show the hospital alert
+                document.getElementById('hospitalAlert').classList.remove('d-none');
+                
+            } catch (error) {
+                document.getElementById('hospitalList').innerHTML = 'Error loading hospital data: ' + error.message;
+                document.getElementById('hospitalAlert').classList.remove('d-none');
+            }
+        }
+        
+        // Display hospital data
+        function displayHospitalData(hospitals) {
+            const hospitalList = document.getElementById('hospitalList');
+            
+            if (!hospitals || Object.keys(hospitals).length === 0) {
+                hospitalList.innerHTML = 'No hospitals found near this location.';
+                return;
+            }
+            
+            let hospitalsHtml = '<div class="row g-2">';
+            
+            Object.entries(hospitals).forEach(([level, hospitalData]) => {
+                if (hospitalData.facilities && hospitalData.facilities.length > 0) {
+                    hospitalsHtml += `
+                        <div class="col-md-6">
+                            <h6 class="text-primary mb-2">${level.replace('_', ' ').toUpperCase()} (${hospitalData.facilities.length} found)</h6>
+                            <ul class="list-unstyled mb-3">
+                    `;
+                    
+                    hospitalData.facilities.slice(0, 3).forEach(hospital => {
+                        const distance = hospital.distance ? `${hospital.distance.toFixed(1)} km` : 'Distance unknown';
+                        hospitalsHtml += `
+                            <li class="mb-2">
+                                <div class="fw-bold">${hospital.name || 'Unnamed facility'}</div>
+                                <small class="text-muted">${distance}</small>
+                                ${hospital.address ? `<br><small>${hospital.address}</small>` : ''}
+                            </li>
+                        `;
+                    });
+                    
+                    if (hospitalData.facilities.length > 3) {
+                        hospitalsHtml += `<li><small class="text-muted">... and ${hospitalData.facilities.length - 3} more</small></li>`;
+                    }
+                    
+                    hospitalsHtml += '</ul></div>';
+                }
+            });
+            
+            hospitalsHtml += '</div>';
+            hospitalList.innerHTML = hospitalsHtml;
         }
         
         // Display incident data in the UI
@@ -300,7 +343,7 @@
             if (!incidentData) return;
             
             // Update title
-            document.getElementById('incidentTitle').textContent = incidentData.name;
+            document.getElementById('incidentTitle').textContent = incidentData.name || 'Unnamed Incident';
             
             // Update incident info
             const incidentInfo = document.getElementById('incidentInfo');
@@ -311,32 +354,30 @@
                         <strong>ID:</strong> <code class="bg-light px-2 py-1 rounded">${incidentData.incident_id}</code>
                     </div>
                     <div class="col-sm-6">
-                        <strong>Type:</strong> ${incidentData.incident_type}
+                        <strong>Type:</strong> ${incidentData.incident_type || 'Unknown'}
                     </div>
                     <div class="col-sm-6">
-                        <strong>Status:</strong> <span class="badge bg-${statusClass}">${incidentData.status.toUpperCase()}</span>
+                        <strong>Status:</strong> <span class="badge bg-${statusClass}">${(incidentData.status || 'unknown').toUpperCase()}</span>
                     </div>
                     <div class="col-12">
-                        <strong>Created:</strong> ${new Date(incidentData.created_at).toLocaleString()}
+                        <strong>Created:</strong> ${incidentData.created_at ? new Date(incidentData.created_at).toLocaleString() : 'Unknown'}
                     </div>
-                    <div class="col-12">
-                        <strong>Description:</strong> <em>${incidentData.description}</em>
-                    </div>
+                    ${incidentData.description ? `<div class="col-12"><strong>Description:</strong> <em>${incidentData.description}</em></div>` : ''}
                 </div>
             `;
             
             // Update location info
             const locationInfo = document.getElementById('locationInfo');
-            if (incidentData.location) {
+            if (incidentData.latitude && incidentData.longitude) {
                 locationInfo.innerHTML = `
                     <div class="row g-2">
                         <div class="col-12">
                             <strong>Address:</strong><br>
-                            <span class="text-muted">${incidentData.location.address}</span>
+                            <span class="text-muted">${incidentData.address || 'Address not available'}</span>
                         </div>
                         <div class="col-12">
                             <strong>Coordinates:</strong><br>
-                            <code class="bg-light px-2 py-1 rounded">${incidentData.location.latitude.toFixed(6)}, ${incidentData.location.longitude.toFixed(6)}</code>
+                            <code class="bg-light px-2 py-1 rounded">${parseFloat(incidentData.latitude).toFixed(6)}, ${parseFloat(incidentData.longitude).toFixed(6)}</code>
                         </div>
                     </div>
                 `;
@@ -344,11 +385,46 @@
                 locationInfo.innerHTML = '<div class="text-muted">Location not set</div>';
             }
             
+            // Load divisions
+            loadDivisions();
+            
+            // Show content, hide loading
+            document.getElementById('loadingDiv').classList.add('d-none');
+            document.getElementById('incidentContent').classList.remove('d-none');
+        }
+        
+        // Load divisions data
+        async function loadDivisions() {
+            try {
+                const response = await fetch(`/api/incident/${incidentId}/divisions`);
+                const data = await response.json();
+                
+                if (data.success && data.divisions) {
+                    displayDivisions(data.divisions);
+                } else {
+                    // No divisions yet
+                    document.getElementById('divisionsSummary').innerHTML = '<div class="text-muted">No search divisions created yet.</div>';
+                    document.getElementById('divisionsList').innerHTML = '';
+                }
+            } catch (error) {
+                console.error('Error loading divisions:', error);
+                document.getElementById('divisionsSummary').innerHTML = '<div class="text-muted">Error loading divisions data.</div>';
+            }
+        }
+        
+        // Display divisions
+        function displayDivisions(divisions) {
+            if (!divisions || divisions.length === 0) {
+                document.getElementById('divisionsSummary').innerHTML = '<div class="text-muted">No search divisions created yet.</div>';
+                document.getElementById('divisionsList').innerHTML = '';
+                return;
+            }
+            
             // Update divisions summary
             const summary = document.getElementById('divisionsSummary');
-            const totalDivisions = incidentData.divisions.length;
-            const assignedDivisions = incidentData.divisions.filter(d => d.status === 'assigned').length;
-            const completedDivisions = incidentData.divisions.filter(d => d.status === 'completed').length;
+            const totalDivisions = divisions.length;
+            const assignedDivisions = divisions.filter(d => d.status === 'assigned').length;
+            const completedDivisions = divisions.filter(d => d.status === 'completed').length;
             const unassignedDivisions = totalDivisions - assignedDivisions - completedDivisions;
             
             summary.innerHTML = `
@@ -382,7 +458,7 @@
             
             // Display division cards
             const divisionsList = document.getElementById('divisionsList');
-            divisionsList.innerHTML = incidentData.divisions.map(division => {
+            divisionsList.innerHTML = divisions.map(division => {
                 const statusClass = division.status === 'assigned' ? 'success' : 
                                    division.status === 'completed' ? 'info' : 'warning';
                 const borderClass = division.status === 'assigned' ? 'border-success' : 
@@ -392,27 +468,23 @@
                     <div class="col-md-6 col-lg-4">
                         <div class="card h-100 ${borderClass}">
                             <div class="card-header">
-                                <h6 class="card-title mb-0">${division.name}</h6>
+                                <h6 class="card-title mb-0">${division.division_name || division.name}</h6>
                                 <small class="text-muted">${division.division_id}</small>
                             </div>
                             <div class="card-body">
                                 <div class="mb-2">
-                                    <span class="badge bg-${statusClass}">${division.status.toUpperCase()}</span>
+                                    <span class="badge bg-${statusClass}">${(division.status || 'unassigned').toUpperCase()}</span>
                                 </div>
                                 <div class="small">
-                                    <div><strong>Team:</strong> ${division.team || '<em>Not assigned</em>'}</div>
-                                    <div><strong>Area:</strong> ${division.area_size}</div>
-                                    <div><strong>Priority:</strong> ${division.priority}</div>
+                                    <div><strong>Team:</strong> ${division.assigned_team || '<em>Not assigned</em>'}</div>
+                                    ${division.team_leader ? `<div><strong>Leader:</strong> ${division.team_leader}</div>` : ''}
+                                    ${division.priority ? `<div><strong>Priority:</strong> ${division.priority}</div>` : ''}
                                 </div>
                             </div>
                         </div>
                     </div>
                 `;
             }).join('');
-            
-            // Show content, hide loading
-            document.getElementById('loadingDiv').classList.add('d-none');
-            document.getElementById('incidentContent').classList.remove('d-none');
         }
         
         // Update map with incident data
@@ -420,12 +492,15 @@
             if (!incidentData) return;
             
             // Add incident location marker
-            if (incidentData.location) {
+            if (incidentData.latitude && incidentData.longitude) {
                 if (incidentMarker) {
                     map.removeLayer(incidentMarker);
                 }
                 
-                incidentMarker = L.marker([incidentData.location.latitude, incidentData.location.longitude], {
+                const lat = parseFloat(incidentData.latitude);
+                const lng = parseFloat(incidentData.longitude);
+                
+                incidentMarker = L.marker([lat, lng], {
                     icon: L.icon({
                         iconUrl: 'data:image/svg+xml;base64,' + btoa(`
                             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#dc3545" width="32" height="32">
@@ -437,66 +512,43 @@
                     })
                 }).addTo(map);
                 
-                incidentMarker.bindPopup(`<b>Incident Location</b><br>${incidentData.location.address}`);
+                incidentMarker.bindPopup(`<b>Incident Location</b><br>${incidentData.address || 'Location not geocoded'}`);
                 
-                map.setView([incidentData.location.latitude, incidentData.location.longitude], 14);
+                map.setView([lat, lng], 14);
             }
             
-            // Add search area
-            if (incidentData.search_area && incidentData.search_area.coordinates) {
+            // Add search area if available
+            if (incidentData.search_area_coordinates) {
                 searchAreaLayer.clearLayers();
                 
-                const searchArea = L.polygon(
-                    incidentData.search_area.coordinates.map(coord => [coord[1], coord[0]]), // Convert lng,lat to lat,lng
-                    {
-                        color: '#dc3545', // Bootstrap danger color
-                        weight: 3,
-                        fillOpacity: 0.2,
-                        fillColor: '#dc3545'
+                try {
+                    const coordinates = typeof incidentData.search_area_coordinates === 'string' 
+                        ? JSON.parse(incidentData.search_area_coordinates) 
+                        : incidentData.search_area_coordinates;
+                        
+                    if (coordinates && coordinates.length > 0) {
+                        const searchArea = L.polygon(
+                            coordinates.map(coord => [coord[1], coord[0]]), // Convert lng,lat to lat,lng
+                            {
+                                color: '#dc3545', // Bootstrap danger color
+                                weight: 3,
+                                fillOpacity: 0.2,
+                                fillColor: '#dc3545'
+                            }
+                        ).addTo(searchAreaLayer);
+                        
+                        searchArea.bindPopup('<b>Search Area</b><br>Primary search zone');
                     }
-                ).addTo(searchAreaLayer);
-                
-                searchArea.bindPopup('<b>Search Area</b><br>Primary search zone');
+                } catch (e) {
+                    console.error('Error parsing search area coordinates:', e);
+                }
             }
-            
-            // Add division polygons (mock data for demonstration)
-            divisionsGroup.clearLayers();
-            incidentData.divisions.forEach((division, index) => {
-                // Create mock division polygons within the search area
-                const baseCoords = incidentData.search_area.coordinates[0];
-                const latOffset = (index % 2) * 0.005;
-                const lngOffset = Math.floor(index / 2) * 0.005;
-                
-                const divisionCoords = [
-                    [baseCoords[1] + latOffset, baseCoords[0] + lngOffset],
-                    [baseCoords[1] + latOffset + 0.004, baseCoords[0] + lngOffset],
-                    [baseCoords[1] + latOffset + 0.004, baseCoords[0] + lngOffset + 0.004],
-                    [baseCoords[1] + latOffset, baseCoords[0] + lngOffset + 0.004]
-                ];
-                
-                const color = division.status === 'assigned' ? '#198754' : // Bootstrap success
-                             division.status === 'completed' ? '#0dcaf0' : '#ffc107'; // Bootstrap warning
-                
-                const divisionPolygon = L.polygon(divisionCoords, {
-                    color: color,
-                    weight: 2,
-                    fillOpacity: 0.3,
-                    fillColor: color
-                }).addTo(divisionsGroup);
-                
-                divisionPolygon.bindPopup(`
-                    <b>${division.name}</b><br>
-                    Status: ${division.status}<br>
-                    Team: ${division.team || 'Not assigned'}<br>
-                    Area: ${division.area_size}
-                `);
-            });
         }
         
         // Center map on incident
         function centerMap() {
-            if (incidentData && incidentData.location) {
-                map.setView([incidentData.location.latitude, incidentData.location.longitude], 14);
+            if (incidentData && incidentData.latitude && incidentData.longitude) {
+                map.setView([parseFloat(incidentData.latitude), parseFloat(incidentData.longitude)], 14);
             }
         }
         
@@ -528,6 +580,7 @@
             document.getElementById('centerMapBtn').addEventListener('click', centerMap);
             document.getElementById('toggleDivisionsBtn').addEventListener('click', toggleDivisions);
             document.getElementById('refreshBtn').addEventListener('click', refreshData);
+            document.getElementById('showHospitalsBtn').addEventListener('click', loadHospitalData);
         });
     </script>
 </body>
