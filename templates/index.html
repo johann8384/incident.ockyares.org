@@ -4,120 +4,154 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Emergency Incident Management - Create Incident</title>
+    <!-- Bootstrap 5.3 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
     <style>
-        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
-        .container { max-width: 1200px; margin: 0 auto; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .header { background: #6c7b7f; color: white; padding: 20px; border-radius: 8px 8px 0 0; }
-        .content { padding: 20px; }
-        .form-group { margin-bottom: 15px; }
-        .form-row { display: flex; gap: 15px; }
-        .form-row .form-group { flex: 1; }
-        label { display: block; margin-bottom: 5px; font-weight: bold; }
-        input, select, textarea { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
-        textarea { height: 80px; resize: vertical; }
-        .map-container { position: relative; }
-        #map { height: 500px; width: 100%; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 15px; }
+        /* Minimal overrides - only what's absolutely necessary */
+        #map { 
+            height: 500px; 
+            border-radius: 0.375rem; /* Bootstrap border-radius */
+        }
         .map-coordinates { 
             position: absolute; 
-            bottom: 25px; 
+            bottom: 15px; 
             right: 10px; 
-            background: rgba(255, 255, 255, 0.9); 
-            padding: 5px 10px; 
-            border-radius: 4px; 
-            font-size: 12px; 
-            border: 1px solid #ccc;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            font-size: 0.75rem;
+            z-index: 1000;
         }
-        .button-group { display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap; }
-        .btn { padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
-        .btn-primary { background: #1976d2; color: white; }
-        .btn-secondary { background: #757575; color: white; }
-        .btn-success { background: #388e3c; color: white; }
-        .btn-warning { background: #f57c00; color: white; }
-        .btn-danger { background: #d32f2f; color: white; }
-        .btn:hover { opacity: 0.9; }
-        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .btn-submit { background: #2e7d32; color: white; font-size: 16px; padding: 12px 30px; }
-        .status { padding: 10px; border-radius: 4px; margin-bottom: 15px; display: none; }
-        .status.success { background: #e8f5e8; color: #2e7d32; border: 1px solid #4caf50; }
-        .status.error { background: #ffebee; color: #c62828; border: 1px solid #f44336; }
-        .incident-info { background: #f5f5f5; padding: 15px; border-radius: 4px; margin-bottom: 15px; }
-        .divisions-info { background: #e3f2fd; padding: 15px; border-radius: 4px; margin-top: 15px; }
-        .submit-section { text-align: center; padding: 20px; border-top: 1px solid #ddd; margin-top: 20px; }
+        .map-container { 
+            position: relative; 
+        }
     </style>
 </head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>🚨 Emergency Incident Management System</h1>
-            <p>Create and manage wide area search incidents</p>
-        </div>
-        
-        <div class="content">
-            <div id="status" class="status"></div>
-            
-            <form id="incidentForm">
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="incidentName">Incident Name *</label>
-                        <input type="text" id="incidentName" name="name" required placeholder="Enter incident name">
+<body class="bg-light">
+    <div class="container-fluid py-4">
+        <div class="row justify-content-center">
+            <div class="col-12 col-xl-10">
+                <div class="card shadow">
+                    <!-- Header -->
+                    <div class="card-header bg-secondary text-white">
+                        <div class="d-flex align-items-center">
+                            <i class="bi bi-exclamation-triangle-fill me-2 fs-4"></i>
+                            <div>
+                                <h1 class="card-title h3 mb-1">Emergency Incident Management System</h1>
+                                <p class="card-text mb-0">Create and manage wide area search incidents</p>
+                            </div>
+                        </div>
                     </div>
-                    <div class="form-group">
-                        <label for="incidentType">Incident Type *</label>
-                        <select id="incidentType" name="incident_type" required>
-                            <option value="">Select incident type</option>
-                            <option value="Urban Search">Urban Search</option>
-                            <option value="Wilderness Search">Wilderness Search</option>
-                            <option value="Building Collapse">Building Collapse</option>
-                            <option value="Natural Disaster">Natural Disaster</option>
-                            <option value="Hazmat">Hazmat</option>
-                            <option value="Explosion">Explosion</option>
-                            <option value="Other">Other</option>
-                        </select>
-                    </div>
-                </div>
-                
-                <div class="form-group">
-                    <label for="description">Description</label>
-                    <textarea id="description" name="description" placeholder="Enter incident description and any relevant details"></textarea>
-                </div>
+                    
+                    <div class="card-body">
+                        <!-- Status Messages -->
+                        <div id="status" class="alert d-none" role="alert"></div>
+                        
+                        <!-- Incident Form -->
+                        <form id="incidentForm" class="needs-validation" novalidate>
+                            <div class="row g-3 mb-4">
+                                <div class="col-md-6">
+                                    <label for="incidentName" class="form-label">Incident Name <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control" id="incidentName" name="name" required placeholder="Enter incident name">
+                                    <div class="invalid-feedback">
+                                        Please provide a valid incident name.
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="incidentType" class="form-label">Incident Type <span class="text-danger">*</span></label>
+                                    <select class="form-select" id="incidentType" name="incident_type" required>
+                                        <option value="">Select incident type</option>
+                                        <option value="Urban Search">Urban Search</option>
+                                        <option value="Wilderness Search">Wilderness Search</option>
+                                        <option value="Building Collapse">Building Collapse</option>
+                                        <option value="Natural Disaster">Natural Disaster</option>
+                                        <option value="Hazmat">Hazmat</option>
+                                        <option value="Explosion">Explosion</option>
+                                        <option value="Other">Other</option>
+                                    </select>
+                                    <div class="invalid-feedback">
+                                        Please select an incident type.
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="mb-4">
+                                <label for="description" class="form-label">Description</label>
+                                <textarea class="form-control" id="description" name="description" rows="3" placeholder="Enter incident description and any relevant details"></textarea>
+                            </div>
 
-                <div class="submit-section">
-                    <button type="submit" class="btn btn-submit" id="createIncidentBtn">📝 Create Incident</button>
+                            <div class="text-center mb-4">
+                                <button type="submit" class="btn btn-success btn-lg" id="createIncidentBtn">
+                                    <i class="bi bi-plus-circle me-2"></i>Create Incident
+                                </button>
+                            </div>
+                        </form>
+                        
+                        <!-- Incident Info -->
+                        <div class="alert alert-info d-none" id="incidentInfo" role="alert">
+                            <h5 class="alert-heading">
+                                <i class="bi bi-info-circle me-2"></i>Incident Details
+                            </h5>
+                            <div id="incidentDetails"></div>
+                        </div>
+                        
+                        <!-- Map Section -->
+                        <div class="card mt-4">
+                            <div class="card-header">
+                                <h5 class="card-title mb-0">
+                                    <i class="bi bi-geo-alt me-2"></i>Incident Location & Search Area
+                                </h5>
+                            </div>
+                            <div class="card-body">
+                                <!-- Map Controls -->
+                                <div class="d-flex flex-wrap gap-2 mb-3">
+                                    <button class="btn btn-primary" id="setLocationBtn" disabled>
+                                        <i class="bi bi-geo-alt-fill me-2"></i>Set Incident Location
+                                    </button>
+                                    <button class="btn btn-warning" id="drawAreaBtn" disabled>
+                                        <i class="bi bi-bounding-box me-2"></i>Draw Search Area
+                                    </button>
+                                    <button class="btn btn-danger" id="clearAreaBtn" disabled>
+                                        <i class="bi bi-trash me-2"></i>Clear Search Area
+                                    </button>
+                                    <button class="btn btn-success" id="generateDivisionsBtn" disabled>
+                                        <i class="bi bi-lightning-fill me-2"></i>Generate Divisions
+                                    </button>
+                                </div>
+                                
+                                <!-- Map Container -->
+                                <div class="map-container">
+                                    <div id="map" class="border"></div>
+                                    <div class="map-coordinates">
+                                        <span class="badge bg-dark" id="mapCoordinates">
+                                            <i class="bi bi-crosshair me-1"></i>Lat: --, Lng: --
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Divisions Info -->
+                        <div class="alert alert-primary d-none mt-4" id="divisionsInfo" role="alert">
+                            <h5 class="alert-heading">
+                                <i class="bi bi-grid me-2"></i>Search Divisions
+                            </h5>
+                            <div id="divisionsDetails"></div>
+                        </div>
+                    </div>
                 </div>
-            </form>
-            
-            <div class="incident-info" id="incidentInfo" style="display: none;">
-                <h3>📍 Incident Details</h3>
-                <div id="incidentDetails"></div>
-            </div>
-            
-            <h3>🗺️ Incident Location & Search Area</h3>
-            <div class="button-group">
-                <button class="btn btn-primary" id="setLocationBtn" disabled>📍 Set Incident Location</button>
-                <button class="btn btn-warning" id="drawAreaBtn" disabled>🔲 Draw Search Area</button>
-                <button class="btn btn-danger" id="clearAreaBtn" disabled>🗑️ Clear Search Area</button>
-                <button class="btn btn-success" id="generateDivisionsBtn" disabled>⚡ Generate Divisions</button>
-            </div>
-            
-            <div class="map-container">
-                <div id="map"></div>
-                <div class="map-coordinates" id="mapCoordinates">
-                    Lat: --, Lng: --
-                </div>
-            </div>
-            
-            <div class="divisions-info" id="divisionsInfo" style="display: none;">
-                <h3>📊 Search Divisions</h3>
-                <div id="divisionsDetails"></div>
             </div>
         </div>
     </div>
 
+    <!-- Bootstrap 5.3 JS Bundle -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+    
     <script>
         let map, incidentMarker, searchAreaLayer, divisionsGroup;
         let currentIncidentId = null;
@@ -143,19 +177,32 @@
             // Add mouse move event to show coordinates
             map.on('mousemove', function(e) {
                 const coords = document.getElementById('mapCoordinates');
-                coords.textContent = `Lat: ${e.latlng.lat.toFixed(6)}, Lng: ${e.latlng.lng.toFixed(6)}`;
+                coords.innerHTML = `<i class="bi bi-crosshair me-1"></i>Lat: ${e.latlng.lat.toFixed(6)}, Lng: ${e.latlng.lng.toFixed(6)}`;
             });
         }
         
-        // Show status message
+        // Show status message using Bootstrap alerts
         function showStatus(message, type = 'success') {
             const status = document.getElementById('status');
-            status.textContent = message;
-            status.className = `status ${type}`;
-            status.style.display = 'block';
+            const alertClass = type === 'error' ? 'alert-danger' : 'alert-success';
+            const icon = type === 'error' ? 'bi-exclamation-triangle' : 'bi-check-circle';
+            
+            status.className = `alert ${alertClass} d-flex align-items-center`;
+            status.innerHTML = `<i class="bi ${icon} me-2"></i>${message}`;
+            status.classList.remove('d-none');
+            
             setTimeout(() => {
-                status.style.display = 'none';
+                status.classList.add('d-none');
             }, 5000);
+        }
+        
+        // Bootstrap form validation
+        function validateForm(form) {
+            if (!form.checkValidity()) {
+                form.classList.add('was-validated');
+                return false;
+            }
+            return true;
         }
         
         // Create incident
@@ -163,12 +210,13 @@
             e.preventDefault();
             
             const form = document.getElementById('incidentForm');
-            const formData = new FormData(form);
             
-            if (!formData.get('name') || !formData.get('incident_type')) {
+            if (!validateForm(form)) {
                 showStatus('Please fill in all required fields', 'error');
                 return;
             }
+            
+            const formData = new FormData(form);
             
             try {
                 const response = await fetch('/api/incident', {
@@ -185,7 +233,7 @@
                 
                 if (data.success) {
                     currentIncidentId = data.incident_id;
-                    showStatus(`Incident created: ${data.incident_id}`, 'success');
+                    showStatus(`Incident created successfully: ${data.incident_id}`, 'success');
                     updateIncidentInfo(formData);
                     enableInitialControls();
                     // Disable form after successful creation
@@ -204,12 +252,14 @@
             const details = document.getElementById('incidentDetails');
             
             details.innerHTML = `
-                <p><strong>ID:</strong> ${currentIncidentId}</p>
-                <p><strong>Name:</strong> ${formData.get('name')}</p>
-                <p><strong>Type:</strong> ${formData.get('incident_type')}</p>
-                <p><strong>Description:</strong> ${formData.get('description') || 'None'}</p>
+                <div class="row g-2">
+                    <div class="col-sm-6"><strong>ID:</strong> <code>${currentIncidentId}</code></div>
+                    <div class="col-sm-6"><strong>Type:</strong> ${formData.get('incident_type')}</div>
+                    <div class="col-12"><strong>Name:</strong> ${formData.get('name')}</div>
+                    <div class="col-12"><strong>Description:</strong> ${formData.get('description') || '<em>None provided</em>'}</div>
+                </div>
             `;
-            info.style.display = 'block';
+            info.classList.remove('d-none');
         }
         
         // Enable initial controls after incident creation
@@ -250,9 +300,10 @@
             }
             
             isLocationMode = true;
-            document.getElementById('setLocationBtn').textContent = '📍 Click map to set location';
-            document.getElementById('setLocationBtn').classList.remove('btn-primary');
-            document.getElementById('setLocationBtn').classList.add('btn-warning');
+            const btn = document.getElementById('setLocationBtn');
+            btn.innerHTML = '<i class="bi bi-crosshair me-2"></i>Click map to set location';
+            btn.classList.remove('btn-primary');
+            btn.classList.add('btn-warning');
             showStatus('Click on the map to set incident location', 'success');
         }
         
@@ -280,9 +331,10 @@
                     showStatus(`Location set: ${data.address || `${lat.toFixed(6)}, ${lng.toFixed(6)}`}`, 'success');
                     
                     // Reset button
-                    document.getElementById('setLocationBtn').textContent = '📍 Set Incident Location';
-                    document.getElementById('setLocationBtn').classList.remove('btn-warning');
-                    document.getElementById('setLocationBtn').classList.add('btn-primary');
+                    const btn = document.getElementById('setLocationBtn');
+                    btn.innerHTML = '<i class="bi bi-geo-alt-fill me-2"></i>Set Incident Location';
+                    btn.classList.remove('btn-warning');
+                    btn.classList.add('btn-primary');
                     isLocationMode = false;
                     
                     // Enable location-dependent controls
@@ -321,7 +373,7 @@
                             message: '<strong>Error:</strong> Polygon cannot intersect!'
                         },
                         shapeOptions: {
-                            color: '#ff0000',
+                            color: '#dc3545', // Bootstrap danger color
                             weight: 3,
                             fillOpacity: 0.2
                         }
@@ -343,7 +395,7 @@
                 drawControl = null;
             }
             disableSearchAreaControls();
-            document.getElementById('divisionsInfo').style.display = 'none';
+            document.getElementById('divisionsInfo').classList.add('d-none');
             showStatus('Search area cleared', 'success');
         }
         
@@ -387,13 +439,13 @@
                     const details = document.getElementById('divisionsDetails');
                     
                     details.innerHTML = `
-                        <p><strong>Divisions Created:</strong> ${data.count}</p>
-                        <p><strong>Coverage:</strong> Optimized for 4-person teams (40,000 m² per division)</p>
-                        <p><strong>Strategy:</strong> Aligned with road network for systematic search</p>
+                        <div class="row g-2">
+                            <div class="col-sm-4"><strong>Divisions Created:</strong> ${data.count}</div>
+                            <div class="col-sm-8"><strong>Coverage:</strong> Optimized for 4-person teams (40,000 m² per division)</div>
+                            <div class="col-12"><strong>Strategy:</strong> Aligned with road network for systematic search</div>
+                        </div>
                     `;
-                    info.style.display = 'block';
-                    
-                    // TODO: Display divisions on map when backend provides coordinates
+                    info.classList.remove('d-none');
                     
                 } else {
                     showStatus(data.error, 'error');
