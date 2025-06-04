@@ -21,12 +21,20 @@ $DOCKER_COMPOSE -f docker-compose.test.yml down -v 2>/dev/null || true
 # Build and run tests
 $DOCKER_COMPOSE -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from test_runner
 
-# Copy coverage report out of container
-echo "📊 Extracting coverage report..."
-$DOCKER_COMPOSE -f docker-compose.test.yml run --rm test_runner cp -r htmlcov /tmp/ 2>/dev/null || echo "Coverage report extraction skipped"
+# Extract coverage reports from Docker volume
+echo "📊 Extracting coverage reports..."
+docker run --rm -v incidentockyaresorg_test_coverage:/src -v $(pwd):/dest alpine sh -c "
+    cp -r /src/* /dest/ 2>/dev/null || echo 'No coverage files to copy'
+"
 
 # Clean up
 $DOCKER_COMPOSE -f docker-compose.test.yml down -v
 
 echo "✅ Tests completed!"
-echo "📊 Coverage report: htmlcov/index.html"
+if [ -f "coverage.xml" ] || [ -d "htmlcov" ]; then
+    echo "📊 Coverage reports extracted successfully!"
+    [ -d "htmlcov" ] && echo "📊 HTML coverage: htmlcov/index.html"
+    [ -f "coverage.xml" ] && echo "📊 XML coverage: coverage.xml"
+else
+    echo "⚠️  Coverage reports not found"
+fi
