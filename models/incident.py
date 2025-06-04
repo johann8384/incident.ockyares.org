@@ -53,19 +53,12 @@ class Incident:
         if latitude is not None and longitude is not None:
             self.incident_location = Point(longitude, latitude)
 
-        # Convert search area coordinates to WKT if provided
-        search_area_wkt = None
-        if search_area_coordinates and len(search_area_coordinates) >= 3:
-            # Convert lng,lat to lat,lng and create WKT
-            coords_str = ", ".join([f"{coord[0]} {coord[1]}" for coord in search_area_coordinates])
-            search_area_wkt = f"POLYGON(({coords_str}))"
-
-        # Insert into database with all available data
+        # Insert basic incident data first
         query = """
         INSERT INTO incidents (
             incident_id, name, incident_type, description, 
-            incident_location, address, search_area, search_area_coordinates
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            incident_location, address
+        ) VALUES (%s, %s, %s, %s, %s, %s)
         RETURNING id
         """
 
@@ -75,12 +68,29 @@ class Incident:
             self.incident_type, 
             self.description,
             f"POINT({longitude} {latitude})" if self.incident_location else None,
-            self.address,
-            f"ST_GeomFromText('{search_area_wkt}', 4326)" if search_area_wkt else None,
-            json.dumps(search_area_coordinates) if search_area_coordinates else None
+            self.address
         )
 
         result = self.db.execute_query(query, params, fetch=True)
+
+        # Update with search area if provided
+        if search_area_coordinates and len(search_area_coordinates) >= 3:
+            # Convert lng,lat to lat,lng and create WKT
+            coords_str = ", ".join([f"{coord[0]} {coord[1]}" for coord in search_area_coordinates])
+            search_area_wkt = f"POLYGON(({coords_str}))"
+            
+            update_query = """
+            UPDATE incidents 
+            SET search_area = ST_GeomFromText(%s, 4326),
+                search_area_coordinates = %s
+            WHERE incident_id = %s
+            """
+            
+            self.db.execute_query(update_query, (
+                search_area_wkt, 
+                json.dumps(search_area_coordinates), 
+                self.incident_id
+            ))
 
         # Save hospital data if provided
         if self.hospital_data:
