@@ -32,8 +32,15 @@ services:
         condition: service_healthy
     volumes:
       - .:/app:ro
-      - test_coverage:/app/htmlcov
+      # Mount coverage to a writable location
+      - test_coverage:/tmp/coverage
     working_dir: /app
+    # Override the default CMD to output coverage to mounted volume
+    command: >
+      sh -c "
+        python -m pytest tests/ -v --cov=app --cov=models --cov-report=html:/tmp/coverage --cov-report=term-missing &&
+        cp coverage.xml /tmp/coverage/ 2>/dev/null || true
+      "
 
 volumes:
   test_coverage:
