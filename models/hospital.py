@@ -5,59 +5,44 @@ from .database import DatabaseManager
 
 
 class Hospital:
-    """Hospital model for storing and managing hospital data"""
+    """Hospital model for storing and managing Kentucky hospital data"""
     
     def __init__(self, db_manager: DatabaseManager = None):
         self.db = db_manager or DatabaseManager()
-        self.arcgis_url = "https://services1.arcgis.com/Hp6G80Pky0om7QvQ/arcgis/rest/services/Hospitals_gdb/FeatureServer/0/query"
+        # Kentucky hospital service endpoints
+        self.base_url = "https://services3.arcgis.com/ghsX9CKghMvyYjBU/arcgis/rest/services/Ky_Hospitals_WM/FeatureServer/0/query"
         
-    def fetch_hospitals_from_arcgis(self, latitude: float, longitude: float, 
-                                   radius_km: float = 100) -> List[Dict]:
-        """Fetch hospital data from ArcGIS service"""
+        # Define hospital queries
+        self.queries = {
+            'all_acute': "LIC_TYPE = 'ACUTE'",
+            'level1_trauma': "FACILITYID = '100220' OR FACILITYID = '100121'",
+            'level1_pediatric': "FACILITYID = '100234' OR FACILITYID = '100121'"
+        }
+        
+    def fetch_hospitals_from_ky_service(self, query_type: str = 'all_acute') -> List[Dict]:
+        """Fetch hospital data from Kentucky GeoJSON service"""
         try:
             params = {
-                'where': '1=1',
-                'outFields': '*',
-                'f': 'json',
-                'returnGeometry': 'true',
-                'geometryType': 'esriGeometryPoint',
-                'inSR': '4326',
-                'spatialRel': 'esriSpatialRelIntersects',
-                'geometry': f'{longitude},{latitude}',
-                'distance': radius_km * 1000,  # Convert km to meters
-                'units': 'esriSRUnit_Meter'
+                'where': self.queries.get(query_type, self.queries['all_acute']),
+                'outFields': 'FACILITYID,FACILITY,ADDRESS,CITY,COUNTY,ZIP_CODE,PHONE,LIC_TYPE,ACUTE,CRITICAL_ACCESS,TB,CONTACT,AGENCY',
+                'outSR': '4326',
+                'f': 'json'
             }
             
             headers = {
                 'User-Agent': 'EmergencyIncidentApp/1.0'
             }
             
-            response = requests.get(self.arcgis_url, params=params, headers=headers, timeout=30)
+            response = requests.get(self.base_url, params=params, headers=headers, timeout=30)
             
             if response.status_code == 200:
                 data = response.json()
-                
-                if data.get('features'):
-                    hospitals = []
-                    for feature in data['features']:
-                        # Calculate distance
-                        hospital_lat = feature['geometry']['y']
-                        hospital_lng = feature['geometry']['x']
-                        distance = self._calculate_distance(latitude, longitude, hospital_lat, hospital_lng)
-                        
-                        # Add distance to the feature
-                        feature['distance'] = distance
-                        feature['attributes']['distance'] = distance
-                        hospitals.append(feature)
-                    
-                    # Sort by distance
-                    hospitals.sort(key=lambda h: h['distance'])
-                    return hospitals
+                return data.get('features', [])
                 
             return []
             
         except Exception as e:
-            print(f"Failed to fetch hospitals from ArcGIS: {e}")
+            print(f"Failed to fetch hospitals from Kentucky service: {e}")
             return []
     
     def _calculate_distance(self, lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -78,42 +63,58 @@ class Hospital:
         
         return R * c
     
-    def find_key_hospitals(self, hospitals: List[Dict], latitude: float, longitude: float) -> Dict:
-        """Find the closest hospital, Level I trauma center, and Level I pediatric center"""
-        if not hospitals:
-            return {}
+    def find_closest_hospitals(self, latitude: float, longitude: float) -> Dict:
+        """Find closest hospitals for each category"""
+        results = {}
         
-        key_hospitals = {}
+        # Get all acute care hospitals
+        all_hospitals = self.fetch_hospitals_from_ky_service('all_acute')
+        if all_hospitals:
+            # Calculate distances and find closest
+            hospitals_with_distance = []
+            for hospital in all_hospitals:
+                if hospital.get('geometry') and hospital['geometry'].get('x') and hospital['geometry'].get('y'):
+                    hospital_lat = hospital['geometry']['y']
+                    hospital_lng = hospital['geometry']['x']
+                    distance = self._calculate_distance(latitude, longitude, hospital_lat, hospital_lng)
+                    hospital['distance'] = distance
+                    hospitals_with_distance.append(hospital)
+            
+            # Sort by distance and get closest
+            hospitals_with_distance.sort(key=lambda h: h['distance'])
+            results['closest'] = hospitals_with_distance[0] if hospitals_with_distance else None
         
-        # Closest hospital overall
-        key_hospitals['closest'] = hospitals[0] if hospitals else None
+        # Get Level 1 Trauma centers
+        trauma_hospitals = self.fetch_hospitals_from_ky_service('level1_trauma')
+        if trauma_hospitals:
+            trauma_with_distance = []
+            for hospital in trauma_hospitals:
+                if hospital.get('geometry') and hospital['geometry'].get('x') and hospital['geometry'].get('y'):
+                    hospital_lat = hospital['geometry']['y']
+                    hospital_lng = hospital['geometry']['x']
+                    distance = self._calculate_distance(latitude, longitude, hospital_lat, hospital_lng)
+                    hospital['distance'] = distance
+                    trauma_with_distance.append(hospital)
+            
+            trauma_with_distance.sort(key=lambda h: h['distance'])
+            results['level1_trauma'] = trauma_with_distance[0] if trauma_with_distance else None
         
-        # Closest Level I trauma center
-        level1_hospitals = [h for h in hospitals if self._is_level1_trauma(h)]
-        key_hospitals['level1'] = level1_hospitals[0] if level1_hospitals else None
+        # Get Level 1 Pediatric centers
+        pediatric_hospitals = self.fetch_hospitals_from_ky_service('level1_pediatric')
+        if pediatric_hospitals:
+            pediatric_with_distance = []
+            for hospital in pediatric_hospitals:
+                if hospital.get('geometry') and hospital['geometry'].get('x') and hospital['geometry'].get('y'):
+                    hospital_lat = hospital['geometry']['y']
+                    hospital_lng = hospital['geometry']['x']
+                    distance = self._calculate_distance(latitude, longitude, hospital_lat, hospital_lng)
+                    hospital['distance'] = distance
+                    pediatric_with_distance.append(hospital)
+            
+            pediatric_with_distance.sort(key=lambda h: h['distance'])
+            results['level1_pediatric'] = pediatric_with_distance[0] if pediatric_with_distance else None
         
-        # Closest Level 1 Pediatric trauma center
-        pediatric_hospitals = [h for h in hospitals if self._is_level1_pediatric(h)]
-        key_hospitals['pediatric'] = pediatric_hospitals[0] if pediatric_hospitals else None
-        
-        return key_hospitals
-    
-    def _is_level1_trauma(self, hospital: Dict) -> bool:
-        """Check if hospital is a Level I trauma center"""
-        trauma_level = hospital.get('attributes', {}).get('TRAUMA', '')
-        if trauma_level:
-            trauma_upper = trauma_level.upper()
-            return ('LEVEL I' in trauma_upper or 'LEVEL 1' in trauma_upper) and 'PEDIATRIC' not in trauma_upper
-        return False
-    
-    def _is_level1_pediatric(self, hospital: Dict) -> bool:
-        """Check if hospital is a Level I pediatric trauma center"""
-        trauma_level = hospital.get('attributes', {}).get('TRAUMA', '')
-        if trauma_level:
-            trauma_upper = trauma_level.upper()
-            return (('LEVEL I' in trauma_upper or 'LEVEL 1' in trauma_upper) and 
-                   'PEDIATRIC' in trauma_upper)
-        return False
+        return results
     
     def cache_hospitals(self, hospitals: List[Dict]) -> bool:
         """Cache hospital data in local database"""
@@ -131,8 +132,8 @@ class Hospital:
         try:
             query = """
             SELECT 
-                id, name, trauma_level, address, city, state, telephone,
-                latitude, longitude, source_id,
+                id, name, facility_id, address, city, county, zip_code, phone,
+                license_type, latitude, longitude,
                 ST_Distance(
                     hospital_location,
                     ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography
@@ -150,18 +151,18 @@ class Hospital:
             result = self.db.execute_query(query, params, fetch=True)
             
             if result:
-                # Convert to format similar to ArcGIS response
                 hospitals = []
                 for row in result:
                     hospital = {
                         'attributes': {
-                            'OBJECTID': row['source_id'],
-                            'NAME': row['name'],
-                            'TRAUMA': row['trauma_level'],
+                            'FACILITYID': row['facility_id'],
+                            'FACILITY': row['name'],
                             'ADDRESS': row['address'],
                             'CITY': row['city'],
-                            'STATE': row['state'],
-                            'TELEPHONE': row['telephone'],
+                            'COUNTY': row['county'],
+                            'ZIP_CODE': row['zip_code'],
+                            'PHONE': row['phone'],
+                            'LIC_TYPE': row['license_type'],
                             'distance': row['distance_km']
                         },
                         'geometry': {
@@ -182,36 +183,24 @@ class Hospital:
     
     def get_hospitals_for_location(self, latitude: float, longitude: float, 
                                  use_cache: bool = True, cache_duration_hours: int = 24) -> Dict:
-        """Get hospital data for a location, using cache if available and recent"""
+        """Get hospital data for a location"""
         try:
-            hospitals = []
+            # Get closest hospitals using the Kentucky service
+            print("Fetching hospital data from Kentucky GeoJSON service...")
+            key_hospitals = self.find_closest_hospitals(latitude, longitude)
             
-            # Try to get from cache first if enabled
-            if use_cache:
-                hospitals = self.get_cached_hospitals(latitude, longitude)
-                
-                # Check if we have recent data (simple check - could be improved)
-                if hospitals and len(hospitals) > 0:
-                    print(f"Using cached hospital data: {len(hospitals)} hospitals found")
-                
-            # If no cached data or cache disabled, fetch from ArcGIS
-            if not hospitals:
-                print("Fetching fresh hospital data from ArcGIS...")
-                hospitals = self.fetch_hospitals_from_arcgis(latitude, longitude)
-                
-                # Cache the fresh data
-                if hospitals and use_cache:
-                    self.cache_hospitals(hospitals)
-                    print(f"Cached {len(hospitals)} hospitals")
-            
-            # Find key hospitals
-            key_hospitals = self.find_key_hospitals(hospitals, latitude, longitude)
+            # Cache the data if requested
+            if use_cache and key_hospitals:
+                hospitals_to_cache = [h for h in key_hospitals.values() if h is not None]
+                if hospitals_to_cache:
+                    self.cache_hospitals(hospitals_to_cache)
+                    print(f"Cached {len(hospitals_to_cache)} hospitals")
             
             return {
                 'success': True,
                 'hospitals': key_hospitals,
-                'total_found': len(hospitals),
-                'source': 'cache' if use_cache and hospitals else 'arcgis'
+                'total_found': len([h for h in key_hospitals.values() if h is not None]),
+                'source': 'kentucky_geojson'
             }
             
         except Exception as e:
@@ -226,26 +215,26 @@ class Hospital:
     def save_hospital(self, hospital_data: Dict) -> int:
         """Save hospital data to database"""
         try:
-            # Extract hospital attributes
             attributes = hospital_data.get('attributes', {})
             geometry = hospital_data.get('geometry', {})
             
             query = """
             INSERT INTO hospitals (
-                name, trauma_level, address, city, state, 
-                telephone, latitude, longitude, 
-                hospital_location, distance_km, source_id
+                facility_id, name, address, city, county, zip_code,
+                phone, license_type, latitude, longitude, 
+                hospital_location, distance_km
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, 
-                ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s
             )
-            ON CONFLICT (source_id) DO UPDATE SET
+            ON CONFLICT (facility_id) DO UPDATE SET
                 name = EXCLUDED.name,
-                trauma_level = EXCLUDED.trauma_level,
                 address = EXCLUDED.address,
                 city = EXCLUDED.city,
-                state = EXCLUDED.state,
-                telephone = EXCLUDED.telephone,
+                county = EXCLUDED.county,
+                zip_code = EXCLUDED.zip_code,
+                phone = EXCLUDED.phone,
+                license_type = EXCLUDED.license_type,
                 latitude = EXCLUDED.latitude,
                 longitude = EXCLUDED.longitude,
                 hospital_location = EXCLUDED.hospital_location,
@@ -255,18 +244,19 @@ class Hospital:
             """
             
             params = (
-                attributes.get('NAME', ''),
-                attributes.get('TRAUMA', ''),
+                attributes.get('FACILITYID', ''),
+                attributes.get('FACILITY', ''),
                 attributes.get('ADDRESS', ''),
                 attributes.get('CITY', ''),
-                attributes.get('STATE', ''),
-                attributes.get('TELEPHONE', ''),
+                attributes.get('COUNTY', ''),
+                attributes.get('ZIP_CODE', ''),
+                attributes.get('PHONE', ''),
+                attributes.get('LIC_TYPE', ''),
                 geometry.get('y', 0.0),  # latitude
                 geometry.get('x', 0.0),  # longitude
                 geometry.get('x', 0.0),  # longitude for PostGIS point
                 geometry.get('y', 0.0),  # latitude for PostGIS point
-                hospital_data.get('distance', 0.0),
-                attributes.get('OBJECTID') or attributes.get('FID', 0)
+                hospital_data.get('distance', 0.0)
             )
             
             result = self.db.execute_query(query, params, fetch=True)
@@ -279,23 +269,23 @@ class Hospital:
     def save_incident_hospitals(self, incident_id: str, hospital_data: Dict) -> bool:
         """Save hospital data associated with an incident"""
         try:
-            # Save each hospital type
             hospital_ids = {}
             
+            # Save each hospital type
             if hospital_data.get('closest'):
                 hospital_id = self.save_hospital(hospital_data['closest'])
                 if hospital_id:
                     hospital_ids['closest'] = hospital_id
             
-            if hospital_data.get('level1'):
-                hospital_id = self.save_hospital(hospital_data['level1'])
+            if hospital_data.get('level1_trauma'):
+                hospital_id = self.save_hospital(hospital_data['level1_trauma'])
                 if hospital_id:
-                    hospital_ids['level1'] = hospital_id
+                    hospital_ids['level1_trauma'] = hospital_id
             
-            if hospital_data.get('pediatric'):
-                hospital_id = self.save_hospital(hospital_data['pediatric'])
+            if hospital_data.get('level1_pediatric'):
+                hospital_id = self.save_hospital(hospital_data['level1_pediatric'])
                 if hospital_id:
-                    hospital_ids['pediatric'] = hospital_id
+                    hospital_ids['level1_pediatric'] = hospital_id
             
             # Link hospitals to incident
             query = """
@@ -312,8 +302,8 @@ class Hospital:
             params = (
                 incident_id,
                 hospital_ids.get('closest'),
-                hospital_ids.get('level1'),
-                hospital_ids.get('pediatric')
+                hospital_ids.get('level1_trauma'),
+                hospital_ids.get('level1_pediatric')
             )
             
             self.db.execute_query(query, params)
@@ -329,24 +319,21 @@ class Hospital:
             query = """
             SELECT 
                 h_closest.name as closest_name,
-                h_closest.trauma_level as closest_trauma,
                 h_closest.address as closest_address,
                 h_closest.city as closest_city,
-                h_closest.telephone as closest_phone,
+                h_closest.phone as closest_phone,
                 h_closest.distance_km as closest_distance,
                 
                 h_level1.name as level1_name,
-                h_level1.trauma_level as level1_trauma,
                 h_level1.address as level1_address,
                 h_level1.city as level1_city,
-                h_level1.telephone as level1_phone,
+                h_level1.phone as level1_phone,
                 h_level1.distance_km as level1_distance,
                 
                 h_pediatric.name as pediatric_name,
-                h_pediatric.trauma_level as pediatric_trauma,
                 h_pediatric.address as pediatric_address,
                 h_pediatric.city as pediatric_city,
-                h_pediatric.telephone as pediatric_phone,
+                h_pediatric.phone as pediatric_phone,
                 h_pediatric.distance_km as pediatric_distance
                 
             FROM incident_hospitals ih
@@ -363,23 +350,20 @@ class Hospital:
                 return {
                     'closest': {
                         'name': row['closest_name'],
-                        'trauma_level': row['closest_trauma'],
                         'address': row['closest_address'],
                         'city': row['closest_city'],
                         'phone': row['closest_phone'],
                         'distance': row['closest_distance']
                     } if row['closest_name'] else None,
-                    'level1': {
+                    'level1_trauma': {
                         'name': row['level1_name'],
-                        'trauma_level': row['level1_trauma'],
                         'address': row['level1_address'],
                         'city': row['level1_city'],
                         'phone': row['level1_phone'],
                         'distance': row['level1_distance']
                     } if row['level1_name'] else None,
-                    'pediatric': {
+                    'level1_pediatric': {
                         'name': row['pediatric_name'],
-                        'trauma_level': row['pediatric_trauma'],
                         'address': row['pediatric_address'],
                         'city': row['pediatric_city'],
                         'phone': row['pediatric_phone'],
