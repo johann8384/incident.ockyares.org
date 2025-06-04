@@ -79,20 +79,21 @@ class DatabaseManager:
             status VARCHAR(50) DEFAULT 'active'
         );
         
-        -- Hospitals table
+        -- Hospitals table (updated for Kentucky data structure)
         CREATE TABLE IF NOT EXISTS hospitals (
             id SERIAL PRIMARY KEY,
+            facility_id VARCHAR(50) UNIQUE NOT NULL,
             name VARCHAR(255) NOT NULL,
-            trauma_level VARCHAR(100),
             address TEXT,
             city VARCHAR(100),
-            state VARCHAR(50),
-            telephone VARCHAR(50),
+            county VARCHAR(100),
+            zip_code VARCHAR(20),
+            phone VARCHAR(50),
+            license_type VARCHAR(100),
             latitude DECIMAL(10, 8),
             longitude DECIMAL(11, 8),
             hospital_location GEOMETRY(POINT, 4326),
             distance_km DECIMAL(8, 3),
-            source_id INTEGER UNIQUE,
             created_at TIMESTAMP DEFAULT NOW(),
             updated_at TIMESTAMP DEFAULT NOW()
         );
@@ -144,8 +145,8 @@ class DatabaseManager:
         -- Create indexes for performance
         CREATE INDEX IF NOT EXISTS idx_incidents_id ON incidents(incident_id);
         CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
-        CREATE INDEX IF NOT EXISTS idx_hospitals_source_id ON hospitals(source_id);
-        CREATE INDEX IF NOT EXISTS idx_hospitals_trauma ON hospitals(trauma_level);
+        CREATE INDEX IF NOT EXISTS idx_hospitals_facility_id ON hospitals(facility_id);
+        CREATE INDEX IF NOT EXISTS idx_hospitals_license_type ON hospitals(license_type);
         CREATE INDEX IF NOT EXISTS idx_incident_hospitals_incident ON incident_hospitals(incident_id);
         CREATE INDEX IF NOT EXISTS idx_divisions_incident ON search_divisions(incident_id);
         CREATE INDEX IF NOT EXISTS idx_divisions_status ON search_divisions(status);
