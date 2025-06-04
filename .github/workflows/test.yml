@@ -26,13 +26,13 @@ jobs:
     
     - name: Run tests in Docker
       run: |
-        # Use the same docker-compose setup as local development
-        docker-compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from test_runner
+        # Use docker compose (v2) instead of docker-compose
+        docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from test_runner
     
     - name: Extract coverage report
       run: |
         # Extract XML coverage for codecov
-        docker-compose -f docker-compose.test.yml run --rm test_runner \
+        docker compose -f docker-compose.test.yml run --rm test_runner \
           python -m pytest tests/ --cov=app --cov=models --cov-report=xml --quiet || true
         
         # Copy files from volume
@@ -49,7 +49,7 @@ jobs:
     
     - name: Clean up
       if: always()
-      run: docker-compose -f docker-compose.test.yml down -v
+      run: docker compose -f docker-compose.test.yml down -v
 
   lint:
     runs-on: ubuntu-latest
