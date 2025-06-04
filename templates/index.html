@@ -228,56 +228,25 @@
             return isReady;
         }
         
-        // Calculate distance between two points (Haversine formula)
-        function calculateDistance(lat1, lng1, lat2, lng2) {
-            const R = 6371; // Earth's radius in kilometers
-            const dLat = (lat2 - lat1) * Math.PI / 180;
-            const dLng = (lng2 - lng1) * Math.PI / 180;
-            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-                    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-                    Math.sin(dLng/2) * Math.sin(dLng/2);
-            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-            return R * c; // Distance in kilometers
-        }
-        
-        // Fetch hospital data from ArcGIS service
+        // Fetch hospital data from server
         async function fetchHospitalData(lat, lng) {
             try {
-                const url = 'https://services1.arcgis.com/Hp6G80Pky0om7QvQ/arcgis/rest/services/Hospitals_gdb/FeatureServer/0/query';
-                const params = new URLSearchParams({
-                    where: '1=1',
-                    outFields: '*',
-                    f: 'json',
-                    returnGeometry: 'true'
+                const response = await fetch('/api/hospitals/search', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        latitude: lat,
+                        longitude: lng
+                    })
                 });
                 
-                const response = await fetch(`${url}?${params}`);
                 const data = await response.json();
                 
-                if (!data.features || data.features.length === 0) {
-                    throw new Error('No hospital data available');
+                if (data.success) {
+                    return data.hospitals;
+                } else {
+                    throw new Error(data.error || 'Failed to fetch hospital data');
                 }
-                
-                // Calculate distances and add to each hospital
-                const hospitalsWithDistance = data.features.map(feature => {
-                    const hospitalLat = feature.geometry.y;
-                    const hospitalLng = feature.geometry.x;
-                    const distance = calculateDistance(lat, lng, hospitalLat, hospitalLng);
-                    
-                    return {
-                        ...feature,
-                        distance: distance,
-                        attributes: {
-                            ...feature.attributes,
-                            distance: distance
-                        }
-                    };
-                });
-                
-                // Sort by distance
-                hospitalsWithDistance.sort((a, b) => a.distance - b.distance);
-                
-                return hospitalsWithDistance;
                 
             } catch (error) {
                 console.error('Error fetching hospital data:', error);
@@ -285,31 +254,97 @@
             }
         }
         
-        // Find specific hospitals
-        function findHospitals(hospitals, lat, lng) {
-            // Closest hospital overall
-            const closestHospital = hospitals[0];
+        // Reverse geocode coordinates to address
+        async function reverseGeocode(lat, lng) {
+            try {
+                const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`);
+                const data = await response.json();
+                return data.display_name || null;
+            } catch (error) {
+                console.warn('Reverse geocoding failed:', error);
+                return null;
+            }
+        }
+        
+        // Set incident location mode
+        function setLocationMode() {
+            // If there's already a search area, confirm before proceeding
+            if (hasSearchArea) {
+                if (!confirm('Are you sure you want to do this? This will cause the search area to be erased.')) {
+                    return;
+                }
+                // Clear search area
+                clearSearchArea();
+            }
             
-            // Closest Level I trauma center
-            const closestLevel1 = hospitals.find(h => 
-                h.attributes.TRAUMA && 
-                (h.attributes.TRAUMA.toUpperCase().includes('LEVEL I') || 
-                 h.attributes.TRAUMA.toUpperCase().includes('LEVEL 1'))
-            );
-            
-            // Closest Level 1 Pediatric trauma center
-            const closestPediatric = hospitals.find(h => 
-                h.attributes.TRAUMA && 
-                h.attributes.TRAUMA.toUpperCase().includes('PEDIATRIC') &&
-                (h.attributes.TRAUMA.toUpperCase().includes('LEVEL I') || 
-                 h.attributes.TRAUMA.toUpperCase().includes('LEVEL 1'))
-            );
-            
-            return {
-                closest: closestHospital,
-                level1: closestLevel1,
-                pediatric: closestPediatric
-            };
+            isLocationMode = true;
+            const btn = document.getElementById('setLocationBtn');
+            btn.innerHTML = '<i class="bi bi-crosshair me-2"></i>Click map to set location';
+            btn.classList.remove('btn-primary');
+            btn.classList.add('btn-warning');
+            showStatus('Click on the map to set incident location', 'success');
+        }
+        
+        // Set incident location
+        async function setIncidentLocation(lat, lng) {
+            try {
+                // Remove existing marker
+                if (incidentMarker) {
+                    map.removeLayer(incidentMarker);
+                }
+                
+                // Add new marker
+                incidentMarker = L.marker([lat, lng]).addTo(map);
+                
+                // Store location
+                incidentLocation = { latitude: lat, longitude: lng };
+                
+                // Show loading message
+                showStatus('Setting location, looking up address and nearby hospitals...', 'success');
+                
+                // Show hospital info panel with loading state
+                document.getElementById('hospitalInfo').classList.remove('d-none');
+                
+                // Attempt reverse geocoding and hospital lookup in parallel
+                const [address, hospitals] = await Promise.all([
+                    reverseGeocode(lat, lng),
+                    fetchHospitalData(lat, lng)
+                ]);
+                
+                if (address) {
+                    incidentLocation.address = address;
+                    incidentMarker.bindPopup(`<b>Incident Location</b><br>${address}`);
+                } else {
+                    incidentMarker.bindPopup(`<b>Incident Location</b><br>Lat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}`);
+                }
+                
+                // Process hospital data
+                hospitalData = hospitals;
+                displayHospitalInfo(hospitalData);
+                
+                // Update incident info display
+                updateIncidentLocationDisplay();
+                
+                // Reset button
+                const btn = document.getElementById('setLocationBtn');
+                btn.innerHTML = '<i class="bi bi-geo-alt-fill me-2"></i>Set Incident Location';
+                btn.classList.remove('btn-warning');
+                btn.classList.add('btn-primary');
+                isLocationMode = false;
+                
+                // Enable location-dependent controls
+                document.getElementById('drawAreaBtn').disabled = false;
+                
+                // Check if form is ready
+                checkFormReadiness();
+                
+                showStatus(`Location set with hospital data loaded`, 'success');
+                
+            } catch (error) {
+                showStatus('Error setting location: ' + error.message, 'error');
+                // Hide hospital info on error
+                document.getElementById('hospitalInfo').classList.add('d-none');
+            }
         }
         
         // Display hospital information
@@ -428,99 +463,6 @@
             
             html += '</div>';
             details.innerHTML = html;
-        }
-        
-        // Reverse geocode coordinates to address
-        async function reverseGeocode(lat, lng) {
-            try {
-                const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`);
-                const data = await response.json();
-                return data.display_name || null;
-            } catch (error) {
-                console.warn('Reverse geocoding failed:', error);
-                return null;
-            }
-        }
-        
-        // Set incident location mode
-        function setLocationMode() {
-            // If there's already a search area, confirm before proceeding
-            if (hasSearchArea) {
-                if (!confirm('Are you sure you want to do this? This will cause the search area to be erased.')) {
-                    return;
-                }
-                // Clear search area
-                clearSearchArea();
-            }
-            
-            isLocationMode = true;
-            const btn = document.getElementById('setLocationBtn');
-            btn.innerHTML = '<i class="bi bi-crosshair me-2"></i>Click map to set location';
-            btn.classList.remove('btn-primary');
-            btn.classList.add('btn-warning');
-            showStatus('Click on the map to set incident location', 'success');
-        }
-        
-        // Set incident location
-        async function setIncidentLocation(lat, lng) {
-            try {
-                // Remove existing marker
-                if (incidentMarker) {
-                    map.removeLayer(incidentMarker);
-                }
-                
-                // Add new marker
-                incidentMarker = L.marker([lat, lng]).addTo(map);
-                
-                // Store location
-                incidentLocation = { latitude: lat, longitude: lng };
-                
-                // Show loading message
-                showStatus('Setting location, looking up address and nearby hospitals...', 'success');
-                
-                // Show hospital info panel with loading state
-                document.getElementById('hospitalInfo').classList.remove('d-none');
-                
-                // Attempt reverse geocoding and hospital lookup in parallel
-                const [address, hospitals] = await Promise.all([
-                    reverseGeocode(lat, lng),
-                    fetchHospitalData(lat, lng)
-                ]);
-                
-                if (address) {
-                    incidentLocation.address = address;
-                    incidentMarker.bindPopup(`<b>Incident Location</b><br>${address}`);
-                } else {
-                    incidentMarker.bindPopup(`<b>Incident Location</b><br>Lat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}`);
-                }
-                
-                // Process hospital data
-                hospitalData = findHospitals(hospitals, lat, lng);
-                displayHospitalInfo(hospitalData);
-                
-                // Update incident info display
-                updateIncidentLocationDisplay();
-                
-                // Reset button
-                const btn = document.getElementById('setLocationBtn');
-                btn.innerHTML = '<i class="bi bi-geo-alt-fill me-2"></i>Set Incident Location';
-                btn.classList.remove('btn-warning');
-                btn.classList.add('btn-primary');
-                isLocationMode = false;
-                
-                // Enable location-dependent controls
-                document.getElementById('drawAreaBtn').disabled = false;
-                
-                // Check if form is ready
-                checkFormReadiness();
-                
-                showStatus(`Location set with hospital data loaded`, 'success');
-                
-            } catch (error) {
-                showStatus('Error setting location: ' + error.message, 'error');
-                // Hide hospital info on error
-                document.getElementById('hospitalInfo').classList.add('d-none');
-            }
         }
         
         // Update incident location display
