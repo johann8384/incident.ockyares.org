@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import List, Tuple, Optional, Dict
 from shapely.geometry import Point, Polygon
 from .database import DatabaseManager
+from .hospital import Hospital
 
 
 class Incident:
@@ -12,6 +13,7 @@ class Incident:
 
     def __init__(self, db_manager: DatabaseManager = None):
         self.db = db_manager or DatabaseManager()
+        self.hospital_manager = Hospital(self.db)
         self.incident_id = None
         self.name = None
         self.incident_type = None
@@ -20,32 +22,60 @@ class Incident:
         self.address = None
         self.search_area = None
         self.search_divisions = []
+        self.hospital_data = None
         self.search_area_size_m2 = int(os.getenv("SEARCH_AREA_SIZE_M2", 40000))
         self.team_size = int(os.getenv("TEAM_SIZE", 4))
 
     def create_incident(
-        self, name: str, incident_type: str, description: str = ""
+        self, 
+        name: str, 
+        incident_type: str, 
+        description: str = "",
+        latitude: float = None,
+        longitude: float = None,
+        address: str = None,
+        hospital_data: Dict = None
     ) -> str:
-        """Create a new incident"""
+        """Create a new incident with full data"""
         self.incident_id = (
             f"INC-{datetime.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
         )
         self.name = name
         self.incident_type = incident_type
         self.description = description
+        self.address = address
+        self.hospital_data = hospital_data
 
-        # Insert into database
+        # Set location if provided
+        if latitude is not None and longitude is not None:
+            self.incident_location = Point(longitude, latitude)
+
+        # Insert into database with all available data
         query = """
-        INSERT INTO incidents (incident_id, name, incident_type, description)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO incidents (
+            incident_id, name, incident_type, description, 
+            incident_location, address
+        ) VALUES (%s, %s, %s, %s, %s, %s)
         RETURNING id
         """
 
-        result = self.db.execute_query(
-            query,
-            (self.incident_id, self.name, self.incident_type, self.description),
-            fetch=True,
+        params = (
+            self.incident_id, 
+            self.name, 
+            self.incident_type, 
+            self.description,
+            f"POINT({longitude} {latitude})" if self.incident_location else None,
+            self.address
         )
+
+        result = self.db.execute_query(query, params, fetch=True)
+
+        # Save hospital data if provided
+        if self.hospital_data:
+            self.hospital_manager.save_incident_hospitals(
+                self.incident_id, 
+                self.hospital_data
+            )
 
         return self.incident_id
 
@@ -54,8 +84,9 @@ class Incident:
         try:
             self.incident_location = Point(longitude, latitude)
 
-            # Reverse geocode
-            self.address = self._reverse_geocode(latitude, longitude)
+            # Reverse geocode if no address already set
+            if not self.address:
+                self.address = self._reverse_geocode(latitude, longitude)
 
             # Update database
             query = """
@@ -78,8 +109,10 @@ class Incident:
     def set_search_area(self, coordinates: List[Tuple[float, float]]) -> bool:
         """Set search area polygon"""
         try:
-            # Create polygon from coordinates
-            self.search_area = Polygon(coordinates)
+            # Create polygon from coordinates (lat, lng pairs)
+            # Convert to (lng, lat) for PostGIS
+            postgis_coords = [(lng, lat) for lat, lng in coordinates]
+            self.search_area = Polygon(postgis_coords)
 
             # Convert to WKT for PostGIS
             coords_str = ", ".join([f"{lng} {lat}" for lat, lng in coordinates])
@@ -100,12 +133,86 @@ class Incident:
             print(f"Failed to set search area: {e}")
             return False
 
+    def save_hospital_data(self, hospital_data: Dict) -> bool:
+        """Save hospital data for this incident"""
+        try:
+            self.hospital_data = hospital_data
+            return self.hospital_manager.save_incident_hospitals(
+                self.incident_id, 
+                hospital_data
+            )
+        except Exception as e:
+            print(f"Failed to save hospital data: {e}")
+            return False
+
+    def get_incident_data(self) -> Dict:
+        """Get complete incident data including hospitals"""
+        try:
+            # Get basic incident data
+            query = """
+            SELECT 
+                incident_id, name, incident_type, description, address,
+                ST_X(incident_location) as longitude,
+                ST_Y(incident_location) as latitude,
+                ST_AsGeoJSON(search_area) as search_area_geojson,
+                created_at, updated_at, status
+            FROM incidents
+            WHERE incident_id = %s
+            """
+            
+            result = self.db.execute_query(query, (self.incident_id,), fetch=True)
+            
+            if not result:
+                return {}
+            
+            incident = dict(result[0])
+            
+            # Get hospital data
+            hospital_data = self.hospital_manager.get_incident_hospitals(self.incident_id)
+            if hospital_data:
+                incident['hospitals'] = hospital_data
+            
+            # Get divisions
+            divisions = self.get_divisions()
+            if divisions:
+                incident['divisions'] = divisions
+            
+            return incident
+            
+        except Exception as e:
+            print(f"Failed to get incident data: {e}")
+            return {}
+
+    def get_divisions(self) -> List[Dict]:
+        """Get search divisions for this incident"""
+        try:
+            query = """
+            SELECT 
+                id, division_name, division_id, estimated_area_m2,
+                assigned_team, team_leader, priority, search_type,
+                estimated_duration, status,
+                ST_AsGeoJSON(area_geometry) as geometry_geojson
+            FROM search_divisions
+            WHERE incident_id = %s
+            ORDER BY division_name
+            """
+            
+            result = self.db.execute_query(query, (self.incident_id,), fetch=True)
+            return [dict(row) for row in result] if result else []
+            
+        except Exception as e:
+            print(f"Failed to get divisions: {e}")
+            return []
+
     def generate_divisions(self) -> List[Dict]:
         """Generate search divisions based on search area and team capacity"""
         if not self.search_area:
             raise ValueError("Search area must be set before generating divisions")
 
         try:
+            # Clear existing divisions
+            self._clear_existing_divisions()
+            
             # Calculate approximate number of divisions needed
             area_m2 = self._calculate_area_m2(self.search_area)
             num_divisions = max(1, int(area_m2 / self.search_area_size_m2))
@@ -122,6 +229,11 @@ class Incident:
         except Exception as e:
             print(f"Failed to generate divisions: {e}")
             return []
+
+    def _clear_existing_divisions(self):
+        """Clear existing divisions for this incident"""
+        query = "DELETE FROM search_divisions WHERE incident_id = %s"
+        self.db.execute_query(query, (self.incident_id,))
 
     def _reverse_geocode(self, latitude: float, longitude: float) -> str:
         """Reverse geocode coordinates to address using Nominatim"""
@@ -197,14 +309,20 @@ class Incident:
                 clipped = self.search_area.intersection(cell)
 
                 if hasattr(clipped, "area") and clipped.area > 0:
-                    division_name = f"Division {chr(65 + division_counter)}"
+                    division_letter = chr(65 + division_counter)  # A, B, C, etc.
+                    division_name = f"Division {division_letter}"
+                    division_id = f"DIV-{division_letter}"
 
                     divisions.append(
                         {
                             "name": division_name,
+                            "division_id": division_id,
                             "geometry": clipped,
                             "area_m2": self._calculate_area_m2(clipped),
                             "status": "unassigned",
+                            "priority": 1,
+                            "search_type": "primary",
+                            "estimated_duration": "2 hours"
                         }
                     )
 
@@ -223,17 +341,50 @@ class Incident:
 
                 query = """
                 INSERT INTO search_divisions 
-                (incident_id, division_name, area_geometry, estimated_area_m2, status)
-                VALUES (%s, %s, ST_GeomFromText(%s, 4326), %s, %s)
+                (incident_id, division_name, division_id, area_geometry, 
+                 estimated_area_m2, status, priority, search_type, estimated_duration)
+                VALUES (%s, %s, %s, ST_GeomFromText(%s, 4326), %s, %s, %s, %s, %s)
                 """
 
-                self.db.execute_query(
-                    query,
-                    (
-                        self.incident_id,
-                        division["name"],
-                        polygon_wkt,
-                        division["area_m2"],
-                        division["status"],
-                    ),
+                params = (
+                    self.incident_id,
+                    division["name"],
+                    division["division_id"],
+                    polygon_wkt,
+                    division["area_m2"],
+                    division["status"],
+                    division["priority"],
+                    division["search_type"],
+                    division["estimated_duration"]
                 )
+
+                self.db.execute_query(query, params)
+
+    @classmethod
+    def get_incident_by_id(cls, incident_id: str, db_manager: DatabaseManager = None) -> Optional['Incident']:
+        """Load an existing incident by ID"""
+        try:
+            incident = cls(db_manager)
+            incident.incident_id = incident_id
+            
+            # Get incident data
+            data = incident.get_incident_data()
+            if not data:
+                return None
+            
+            # Populate incident object
+            incident.name = data.get('name')
+            incident.incident_type = data.get('incident_type')
+            incident.description = data.get('description')
+            incident.address = data.get('address')
+            
+            if data.get('longitude') and data.get('latitude'):
+                incident.incident_location = Point(data['longitude'], data['latitude'])
+            
+            incident.hospital_data = data.get('hospitals')
+            
+            return incident
+            
+        except Exception as e:
+            print(f"Failed to load incident: {e}")
+            return None
