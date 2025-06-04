@@ -1,0 +1,7 @@
+Flask==3.0.0
+psycopg2-binary==2.9.9
+shapely==2.0.2
+geopandas==0.14.1
+requests==2.31.0
+python-dotenv==1.0.0
+overpass==0.7
