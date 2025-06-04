@@ -7,17 +7,17 @@ requests==2.31.0
 # Database
 psycopg2-binary==2.9.9
 
-# Geospatial stack (pinned compatible versions)
-numpy==1.24.4
-pandas==2.0.3
+# Geospatial stack (NumPy 1.x compatible versions)
+numpy>=1.24.0,<2.0.0
+pandas>=2.0.0,<2.1.0
 shapely==2.0.2
-fiona==1.9.5
-pyproj==3.6.1
-geopandas==0.14.1
+fiona>=1.9.0,<1.10.0
+pyproj>=3.6.0,<3.7.0
+geopandas>=0.14.0,<0.15.0
 
 # QR Code generation
 qrcode[pil]==7.4.2
-Pillow==10.1.0
+Pillow>=10.0.0,<11.0.0
 
 # API integration
 overpass==0.7
