@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -x
 
 # Database Migration Script
 # Runs SQL migration files against the database using Docker Compose
@@ -6,10 +6,11 @@
 set -e
 
 # Configuration
-CONTAINER_NAME="${CONTAINER_NAME:-emergency_postgis}"
+CONTAINER_NAME="${CONTAINER_NAME:-database}"
 DB_NAME="${DB_NAME:-emergency_ops}"
 DB_USER="${DB_USER:-postgres}"
-
+DB_PASSWORD="${DB_PASSWORD:-emergency_password}"
+EXEC_COMMAND="docker compose exec -T -e PGPASSWORD=${DB_PASSWORD} ${CONTAINER_NAME}"
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -37,7 +38,7 @@ echo -e "${GREEN}✅ Database container is running${NC}"
 
 # Test database connection
 echo -e "${YELLOW}📡 Testing database connection...${NC}"
-if ! docker-compose exec -T "$CONTAINER_NAME" psql -U "$DB_USER" -d "$DB_NAME" -c "SELECT 1;" > /dev/null 2>&1; then
+if ! ${EXEC_COMMAND} psql -U "$DB_USER" -d "$DB_NAME" -c "SELECT 1;" > /dev/null 2>&1; then
     echo -e "${RED}❌ Cannot connect to database inside container.${NC}"
     echo -e "${YELLOW}💡 Container may still be starting up. Wait a moment and try again.${NC}"
     exit 1
@@ -47,7 +48,7 @@ echo -e "${GREEN}✅ Database connection successful${NC}"
 
 # Create migrations table if it doesn't exist
 echo -e "${YELLOW}📋 Creating migrations tracking table...${NC}"
-docker-compose exec -T "$CONTAINER_NAME" psql -U "$DB_USER" -d "$DB_NAME" -c "
+${EXEC_COMMAND} psql -U "$DB_USER" -d "$DB_NAME" -c "
 CREATE TABLE IF NOT EXISTS schema_migrations (
     id SERIAL PRIMARY KEY,
     filename VARCHAR(255) UNIQUE NOT NULL,
@@ -80,7 +81,7 @@ for migration_file in "${MIGRATION_FILES[@]}"; do
     filename=$(basename "$migration_file")
     
     # Check if migration has already been applied
-    ALREADY_APPLIED=$(docker-compose exec -T "$CONTAINER_NAME" psql -U "$DB_USER" -d "$DB_NAME" -t -c "
+    ALREADY_APPLIED=$(${EXEC_COMMAND} psql -U "$DB_USER" -d "$DB_NAME" -t -c "
         SELECT COUNT(*) FROM schema_migrations WHERE filename = '$filename';
     " | xargs)
     
@@ -93,9 +94,9 @@ for migration_file in "${MIGRATION_FILES[@]}"; do
     echo -e "${YELLOW}🔄 Applying migration: $filename${NC}"
     
     # Run the migration by copying file to container and executing
-    if cat "$migration_file" | docker-compose exec -T "$CONTAINER_NAME" psql -U "$DB_USER" -d "$DB_NAME" > /dev/null 2>&1; then
+    if cat "$migration_file" | ${EXEC_COMMAND} psql -U "$DB_USER" -d "$DB_NAME" > /dev/null 2>&1; then
         # Record successful migration
-        docker-compose exec -T "$CONTAINER_NAME" psql -U "$DB_USER" -d "$DB_NAME" -c "
+        ${EXEC_COMMAND} psql -U "$DB_USER" -d "$DB_NAME" -c "
             INSERT INTO schema_migrations (filename) VALUES ('$filename');
         " > /dev/null
         
@@ -118,7 +119,7 @@ echo -e "${YELLOW}   Skipped: $SKIPPED_COUNT migrations${NC}"
 # Show current migration status
 echo ""
 echo -e "${YELLOW}📊 Current migration status:${NC}"
-docker-compose exec -T "$CONTAINER_NAME" psql -U "$DB_USER" -d "$DB_NAME" -c "
+${EXEC_COMMAND} psql -U "$DB_USER" -d "$DB_NAME" -c "
 SELECT filename, applied_at 
 FROM schema_migrations 
 ORDER BY applied_at;
