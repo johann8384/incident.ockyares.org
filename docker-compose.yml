@@ -80,8 +80,8 @@ services:
       app:
         condition: service_healthy
     restart: unless-stopped
-    profiles:
-      - production  # Only start nginx with --profile production
+#    profiles:
+#      - production  # Only start nginx with --profile production
 
 volumes:
   postgres_data:
