@@ -131,7 +131,7 @@
         
         // Initialize map
         function initMap() {
-            map = L.map('map').setView([37.7749, -122.4194], 13); // Default to San Francisco
+            map = L.map('map').setView([38.3960874, -85.4425145], 13); // Default to Louisville, KY
             
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '© OpenStreetMap contributors'
@@ -169,17 +169,17 @@
                     status: "active",
                     created_at: new Date().toISOString(),
                     location: {
-                        latitude: 37.7749,
-                        longitude: -122.4194,
-                        address: "San Francisco, CA, USA"
+                        latitude: 38.3960874,
+                        longitude: -85.4425145,
+                        address: "Louisville, KY, USA"
                     },
                     search_area: {
                         coordinates: [
-                            [-122.425, 37.770],
-                            [-122.415, 37.770],
-                            [-122.415, 37.780],
-                            [-122.425, 37.780],
-                            [-122.425, 37.770]
+                            [-85.450, 38.390],
+                            [-85.435, 38.390],
+                            [-85.435, 38.402],
+                            [-85.450, 38.402],
+                            [-85.450, 38.390]
                         ]
                     },
                     divisions: [
