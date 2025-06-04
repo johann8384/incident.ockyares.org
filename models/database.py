@@ -3,19 +3,20 @@ import psycopg2.extras
 import os
 from typing import Optional
 
+
 class DatabaseManager:
     """Handle database connections and operations"""
-    
+
     def __init__(self):
         self.conn = None
         self.db_config = {
-            'host': os.getenv('DB_HOST', 'localhost'),
-            'port': os.getenv('DB_PORT', '5432'),
-            'database': os.getenv('DB_NAME', 'emergency_ops'),
-            'user': os.getenv('DB_USER', 'postgres'),
-            'password': os.getenv('DB_PASSWORD', 'emergency_password')
+            "host": os.getenv("DB_HOST", "localhost"),
+            "port": os.getenv("DB_PORT", "5432"),
+            "database": os.getenv("DB_NAME", "emergency_ops"),
+            "user": os.getenv("DB_USER", "postgres"),
+            "password": os.getenv("DB_PASSWORD", "emergency_password"),
         }
-    
+
     def connect(self) -> psycopg2.extensions.connection:
         """Create database connection"""
         try:
@@ -24,30 +25,30 @@ class DatabaseManager:
         except Exception as e:
             print(f"Database connection failed: {e}")
             raise
-    
+
     def close(self):
         """Close database connection"""
         if self.conn:
             self.conn.close()
             self.conn = None
-    
+
     def execute_query(self, query: str, params: tuple = None, fetch: bool = False):
         """Execute a query with optional parameters"""
         cursor = None
         try:
             if not self.conn:
                 self.connect()
-            
+
             cursor = self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
             cursor.execute(query, params)
-            
+
             if fetch:
                 result = cursor.fetchall()
                 return result
             else:
                 self.conn.commit()
                 return cursor.rowcount
-                
+
         except Exception as e:
             if self.conn:
                 self.conn.rollback()
@@ -56,7 +57,7 @@ class DatabaseManager:
         finally:
             if cursor:
                 cursor.close()
-    
+
     def create_tables(self):
         """Create initial database schema"""
         schema_sql = """
@@ -94,5 +95,5 @@ class DatabaseManager:
         CREATE INDEX IF NOT EXISTS idx_incidents_search_area ON incidents USING GIST(search_area);
         CREATE INDEX IF NOT EXISTS idx_divisions_geometry ON search_divisions USING GIST(area_geometry);
         """
-        
+
         self.execute_query(schema_sql)
