@@ -1,5 +1,5 @@
+tests
+docker/database/data
 .idea
 logs/*
 static/qr_codes/*
-docker/geoserver_data
-docker/postgis_data
