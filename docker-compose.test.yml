@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  test_db:
+    image: postgis/postgis:15-3.3
+    environment:
+      POSTGRES_DB: emergency_ops_test
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: test_password
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d emergency_ops_test"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  test_runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    environment:
+      TEST_DB_HOST: test_db
+      TEST_DB_PORT: 5432
+      TEST_DB_USER: postgres
+      TEST_DB_PASSWORD: test_password
+      FLASK_ENV: testing
+    depends_on:
+      test_db:
+        condition: service_healthy
+    volumes:
+      - .:/app:ro
+      - test_coverage:/app/htmlcov
+    working_dir: /app
+
+volumes:
+  test_coverage:
