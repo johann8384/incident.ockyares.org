@@ -66,6 +66,7 @@
                                         <option value="">Select incident type</option>
                                         <option value="Urban Search">Urban Search</option>
                                         <option value="Wilderness Search">Wilderness Search</option>
+                                        <option value="Wilderness Search">Wilderness Search</option>
                                         <option value="Building Collapse">Building Collapse</option>
                                         <option value="Natural Disaster">Natural Disaster</option>
                                         <option value="Hazmat">Hazmat</option>
@@ -194,7 +195,7 @@
         
         // Initialize map
         function initMap() {
-            map = L.map('map').setView([38.3960874, -85.4425145], 13); // Default to Louisville, KY
+            map = L.map('map').setView([38.3960874, -85.4425145], 15); // Default zoom level 15
             
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '© OpenStreetMap contributors'
@@ -950,7 +951,10 @@
         // Handle location button click
         function handleLocationButtonClick() {
             if (pendingLocation && !incidentLocation) {
-                // There's a pending location to save
+                // There's a pending location to save (first time setting location)
+                saveIncidentLocation();
+            } else if (pendingLocation && incidentLocation) {
+                // There's a pending location to save (updating existing location)
                 saveIncidentLocation();
             } else {
                 // Start location placement mode
