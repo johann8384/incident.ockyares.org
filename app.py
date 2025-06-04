@@ -21,6 +21,12 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/incident/<incident_id>")
+def view_incident(incident_id):
+    """View specific incident"""
+    return render_template("incident_view.html", incident_id=incident_id)
+
+
 @app.route("/api/incident", methods=["POST"])
 def create_incident():
     """Create new incident"""
