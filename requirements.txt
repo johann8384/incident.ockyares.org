@@ -1,8 +1,23 @@
+# Core Flask dependencies
 Flask==3.0.0
-psycopg2-binary==2.9.9
-shapely==2.0.2
-geopandas==0.14.1
-requests==2.31.0
-python-dotenv==1.0.0
-overpass==0.7
 gunicorn==21.2.0
+python-dotenv==1.0.0
+requests==2.31.0
+
+# Database
+psycopg2-binary==2.9.9
+
+# Geospatial stack (pinned compatible versions)
+numpy==1.24.4
+pandas==2.0.3
+shapely==2.0.2
+fiona==1.9.5
+pyproj==3.6.1
+geopandas==0.14.1
+
+# QR Code generation
+qrcode[pil]==7.4.2
+Pillow==10.1.0
+
+# API integration
+overpass==0.7
