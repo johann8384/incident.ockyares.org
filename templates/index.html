@@ -175,6 +175,7 @@
         let drawControl = null;
         let hasSearchArea = false;
         let incidentLocation = null;
+        let pendingLocation = null; // Store the pin location before saving
         let drawingPoints = [];
         let currentDrawingLine = null;
         let searchAreaPolygon = null;
@@ -266,8 +267,8 @@
             }
         }
         
-        // Set incident location mode
-        function setLocationMode() {
+        // Start location placement mode
+        function startLocationMode() {
             // If there's already a search area, confirm before proceeding
             if (hasSearchArea) {
                 if (!confirm('Are you sure you want to do this? This will cause the search area to be erased.')) {
@@ -279,37 +280,75 @@
             
             isLocationMode = true;
             const btn = document.getElementById('setLocationBtn');
-            btn.innerHTML = '<i class="bi bi-crosshair me-2"></i>Click map to set location';
+            btn.innerHTML = '<i class="bi bi-crosshair me-2"></i>Click map to place pin';
             btn.classList.remove('btn-primary');
             btn.classList.add('btn-warning');
-            showStatus('Click on the map to set incident location', 'success');
+            btn.disabled = true; // Disable until pin is placed
+            showStatus('Click on the map to place incident location pin', 'success');
         }
         
-        // Set incident location
-        async function setIncidentLocation(lat, lng) {
+        // Place incident marker without saving
+        function placeIncidentPin(lat, lng) {
+            // Remove existing marker
+            if (incidentMarker) {
+                map.removeLayer(incidentMarker);
+            }
+            
+            // Add new marker (temporary - different style to show it's not saved)
+            incidentMarker = L.marker([lat, lng], {
+                opacity: 0.7 // Make it slightly transparent to show it's temporary
+            }).addTo(map);
+            
+            incidentMarker.bindPopup('<b>Proposed Incident Location</b><br>Click "Save Incident Location" to confirm');
+            
+            // Store pending location
+            pendingLocation = { latitude: lat, longitude: lng };
+            
+            // Update button to allow saving
+            const btn = document.getElementById('setLocationBtn');
+            btn.innerHTML = '<i class="bi bi-floppy me-2"></i>Save Incident Location';
+            btn.classList.remove('btn-warning');
+            btn.classList.add('btn-success');
+            btn.disabled = false;
+            
+            showStatus('Pin placed! Click "Save Incident Location" to confirm and look up details.', 'success');
+        }
+        
+        // Save incident location and perform lookups
+        async function saveIncidentLocation() {
+            if (!pendingLocation) {
+                showStatus('No location to save', 'error');
+                return;
+            }
+            
             try {
-                // Remove existing marker
-                if (incidentMarker) {
-                    map.removeLayer(incidentMarker);
-                }
+                const lat = pendingLocation.latitude;
+                const lng = pendingLocation.longitude;
                 
-                // Add new marker
-                incidentMarker = L.marker([lat, lng]).addTo(map);
-                
-                // Store location
-                incidentLocation = { latitude: lat, longitude: lng };
+                // Update button to show loading
+                const btn = document.getElementById('setLocationBtn');
+                btn.innerHTML = '<i class="bi bi-hourglass-split me-2"></i>Saving location...';
+                btn.disabled = true;
                 
                 // Show loading message
-                showStatus('Setting location, looking up address and nearby hospitals...', 'success');
+                showStatus('Saving location, looking up address and nearby hospitals...', 'success');
                 
                 // Show hospital info panel with loading state
                 document.getElementById('hospitalInfo').classList.remove('d-none');
+                
+                // Make marker permanent (full opacity)
+                if (incidentMarker) {
+                    incidentMarker.setOpacity(1.0);
+                }
                 
                 // Attempt reverse geocoding and hospital lookup in parallel
                 const [address, hospitals] = await Promise.all([
                     reverseGeocode(lat, lng),
                     fetchHospitalData(lat, lng)
                 ]);
+                
+                // Store the final location
+                incidentLocation = { latitude: lat, longitude: lng };
                 
                 if (address) {
                     incidentLocation.address = address;
@@ -325,12 +364,13 @@
                 // Update incident info display
                 updateIncidentLocationDisplay();
                 
-                // Reset button
-                const btn = document.getElementById('setLocationBtn');
+                // Reset button and state
                 btn.innerHTML = '<i class="bi bi-geo-alt-fill me-2"></i>Set Incident Location';
-                btn.classList.remove('btn-warning');
+                btn.classList.remove('btn-success');
                 btn.classList.add('btn-primary');
+                btn.disabled = false;
                 isLocationMode = false;
+                pendingLocation = null;
                 
                 // Enable location-dependent controls
                 document.getElementById('drawAreaBtn').disabled = false;
@@ -338,10 +378,18 @@
                 // Check if form is ready
                 checkFormReadiness();
                 
-                showStatus(`Location set with hospital data loaded`, 'success');
+                showStatus(`Location saved with hospital data loaded`, 'success');
                 
             } catch (error) {
-                showStatus('Error setting location: ' + error.message, 'error');
+                showStatus('Error saving location: ' + error.message, 'error');
+                
+                // Reset button on error
+                const btn = document.getElementById('setLocationBtn');
+                btn.innerHTML = '<i class="bi bi-floppy me-2"></i>Save Incident Location';
+                btn.classList.remove('btn-success');
+                btn.classList.add('btn-success');
+                btn.disabled = false;
+                
                 // Hide hospital info on error
                 document.getElementById('hospitalInfo').classList.add('d-none');
             }
@@ -504,7 +552,7 @@
         // Handle map clicks for drawing
         function handleMapClick(e) {
             if (isLocationMode) {
-                setIncidentLocation(e.latlng.lat, e.latlng.lng);
+                placeIncidentPin(e.latlng.lat, e.latlng.lng);
                 return;
             }
             
@@ -796,6 +844,17 @@
             return divisions;
         }
         
+        // Handle location button click
+        function handleLocationButtonClick() {
+            if (pendingLocation && !incidentLocation) {
+                // There's a pending location to save
+                saveIncidentLocation();
+            } else {
+                // Start location placement mode
+                startLocationMode();
+            }
+        }
+        
         // Event listeners
         document.addEventListener('DOMContentLoaded', function() {
             initMap();
@@ -805,7 +864,7 @@
             document.getElementById('incidentType').addEventListener('change', checkFormReadiness);
             
             // Map controls
-            document.getElementById('setLocationBtn').addEventListener('click', setLocationMode);
+            document.getElementById('setLocationBtn').addEventListener('click', handleLocationButtonClick);
             document.getElementById('drawAreaBtn').addEventListener('click', () => {
                 if (isDrawMode) {
                     saveSearchArea();
