@@ -32,8 +32,6 @@
             position: relative; 
             width: 100%;
             height: 100%;
-#            max-width: 60em;
-#            padding: 0.2em;
         }
         .fill {
             min-height: 100%;
@@ -202,6 +200,7 @@
         let currentDrawingLine = null;
         let searchAreaPolygon = null;
         let hospitalData = null;
+        let generatedDivisions = null; // Store divisions from preview
         
         // Initialize map
         function initMap() {
@@ -357,6 +356,32 @@
             }
         }
         
+        // Generate divisions preview using API
+        async function generateDivisionsPreview(coordinates) {
+            try {
+                const response = await fetch('/api/divisions/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        coordinates: coordinates.map(coord => [coord.lng, coord.lat]), // Convert to lng,lat
+                        area_size_m2: 40000
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    return data.divisions;
+                } else {
+                    throw new Error(data.error || 'Failed to generate divisions');
+                }
+                
+            } catch (error) {
+                console.error('Error generating divisions:', error);
+                throw error;
+            }
+        }
+        
         // Start location placement mode
         function startLocationMode() {
             // Check if there's a search area or divisions defined
@@ -388,6 +413,7 @@
             drawingPoints = [];
             currentDrawingLine = null;
             searchAreaPolygon = null;
+            generatedDivisions = null;
             
             // Reset search area button
             const drawBtn = document.getElementById('drawAreaBtn');
@@ -781,53 +807,6 @@
             clearSearchAreaAndDivisions();
         }
         
-        // Create incident
-        async function createIncident() {
-            if (!checkFormReadiness()) {
-                showStatus('Please fill in all required fields and set incident location', 'error');
-                return;
-            }
-            
-            const formData = new FormData(document.getElementById('incidentForm'));
-            
-            try {
-                const incidentPayload = {
-                    name: formData.get('name'),
-                    incident_type: formData.get('incident_type'),
-                    description: formData.get('description'),
-                    latitude: incidentLocation.latitude,
-                    longitude: incidentLocation.longitude,
-                    address: incidentLocation.address,
-                    hospital_data: hospitalData // Include hospital data in incident
-                };
-                
-                const response = await fetch('/api/incident', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(incidentPayload)
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    showStatus(`Incident created successfully: ${data.incident_id}`, 'success');
-                    
-                    // Disable form and redirect or show success state
-                    document.getElementById('incidentForm').querySelectorAll('input, select, textarea').forEach(el => el.disabled = true);
-                    document.getElementById('createIncidentBtn').disabled = true;
-                    
-                    // Optional: redirect to incident view
-                    setTimeout(() => {
-                        window.location.href = `/incident/${data.incident_id}`;
-                    }, 2000);
-                } else {
-                    showStatus(data.error, 'error');
-                }
-            } catch (error) {
-                showStatus('Error creating incident: ' + error.message, 'error');
-            }
-        }
-        
         // Generate divisions and display on map
         async function generateDivisions() {
             if (!searchAreaPolygon) {
@@ -839,16 +818,20 @@
                 // Clear existing divisions
                 divisionsGroup.clearLayers();
                 
-                // Get search area bounds
-                const bounds = searchAreaPolygon.getBounds();
+                // Get search area coordinates
                 const searchAreaCoords = searchAreaPolygon.getLatLngs()[0];
                 
-                // Create mock divisions for demonstration
-                // In production, this would call the backend API
-                const divisions = createMockDivisions(searchAreaCoords, bounds);
+                // Generate divisions using API
+                const btn = document.getElementById('generateDivisionsBtn');
+                btn.innerHTML = '<i class="bi bi-hourglass-split me-2"></i>Generating...';
+                btn.disabled = true;
+                
+                showStatus('Generating search divisions...', 'success');
+                
+                generatedDivisions = await generateDivisionsPreview(searchAreaCoords);
                 
                 // Display divisions on map
-                divisions.forEach((division, index) => {
+                generatedDivisions.forEach((division, index) => {
                     const colors = [
                         '#198754', // success - assigned
                         '#198754', // success - assigned  
@@ -857,45 +840,56 @@
                     ];
                     const color = colors[index % colors.length];
                     
-                    const divisionPolygon = L.polygon(division.coordinates, {
-                        color: color,
-                        weight: 2,
-                        fillOpacity: 0.4,
-                        fillColor: color
-                    }).addTo(divisionsGroup);
+                    // Convert coordinates back to lat,lng
+                    const coordinates = division.coordinates ? 
+                        division.coordinates.map(coord => [coord[1], coord[0]]) : // lng,lat to lat,lng
+                        division.geom ? JSON.parse(division.geom).coordinates[0].map(coord => [coord[1], coord[0]]) : null;
                     
-                    // Add label in center of division
-                    const center = divisionPolygon.getBounds().getCenter();
-                    const label = L.marker(center, {
-                        icon: L.divIcon({
-                            className: 'division-label',
-                            html: `<div style="background: white; border: 2px solid ${color}; border-radius: 50%; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px;">${division.name}</div>`,
-                            iconSize: [30, 30],
-                            iconAnchor: [15, 15]
-                        })
-                    }).addTo(divisionsGroup);
-                    
-                    divisionPolygon.bindPopup(`
-                        <b>${division.division_name}</b><br>
-                        <strong>Status:</strong> ${division.status}<br>
-                        <strong>Team:</strong> ${division.team || 'Not assigned'}<br>
-                        <strong>Area:</strong> ~${division.area_size}<br>
-                        <strong>Priority:</strong> ${division.priority}
-                    `);
-                    
-                    label.bindPopup(`
-                        <b>${division.division_name}</b><br>
-                        <strong>Status:</strong> ${division.status}<br>
-                        <strong>Team:</strong> ${division.team || 'Not assigned'}<br>
-                        <strong>Area:</strong> ~${division.area_size}<br>
-                        <strong>Priority:</strong> ${division.priority}
-                    `);
+                    if (coordinates) {
+                        const divisionPolygon = L.polygon(coordinates, {
+                            color: color,
+                            weight: 2,
+                            fillOpacity: 0.4,
+                            fillColor: color
+                        }).addTo(divisionsGroup);
+                        
+                        // Add label in center of division
+                        const center = divisionPolygon.getBounds().getCenter();
+                        const label = L.marker(center, {
+                            icon: L.divIcon({
+                                className: 'division-label',
+                                html: `<div style="background: white; border: 2px solid ${color}; border-radius: 50%; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px;">${division.division_id || division.name}</div>`,
+                                iconSize: [30, 30],
+                                iconAnchor: [15, 15]
+                            })
+                        }).addTo(divisionsGroup);
+                        
+                        divisionPolygon.bindPopup(`
+                            <b>${division.division_name || division.name}</b><br>
+                            <strong>ID:</strong> ${division.division_id}<br>
+                            <strong>Status:</strong> ${division.status || 'unassigned'}<br>
+                            <strong>Team:</strong> ${division.assigned_team || 'Not assigned'}<br>
+                            <strong>Priority:</strong> ${division.priority || 'Medium'}
+                        `);
+                        
+                        label.bindPopup(`
+                            <b>${division.division_name || division.name}</b><br>
+                            <strong>ID:</strong> ${division.division_id}<br>
+                            <strong>Status:</strong> ${division.status || 'unassigned'}<br>
+                            <strong>Team:</strong> ${division.assigned_team || 'Not assigned'}<br>
+                            <strong>Priority:</strong> ${division.priority || 'Medium'}
+                        `);
+                    }
                 });
                 
                 // Mark that we have divisions
                 hasDivisions = true;
                 
-                showStatus(`Generated ${divisions.length} search divisions and displayed on map`, 'success');
+                // Reset button
+                btn.innerHTML = '<i class="bi bi-lightning-fill me-2"></i>Generate Divisions';
+                btn.disabled = false;
+                
+                showStatus(`Generated ${generatedDivisions.length} search divisions and displayed on map`, 'success');
                 
                 // Display divisions info
                 const info = document.getElementById('divisionsInfo');
@@ -903,8 +897,8 @@
                 
                 details.innerHTML = `
                     <div class="row g-2">
-                        <div class="col-sm-4"><strong>Divisions Created:</strong> ${divisions.length}</div>
-                        <div class="col-sm-8"><strong>Coverage:</strong> Optimized for 4-person teams (~40,000 m² per division)</div>
+                        <div class="col-sm-4"><strong>Divisions Created:</strong> ${generatedDivisions.length}</div>
+                        <div class="col-sm-8"><strong>Coverage:</strong> Optimized for teams (~40,000 m² per division)</div>
                         <div class="col-12"><strong>Strategy:</strong> Grid-based divisions within search area polygon</div>
                         <div class="col-12">
                             <small class="text-muted">
@@ -921,56 +915,80 @@
                 
             } catch (error) {
                 showStatus('Error generating divisions: ' + error.message, 'error');
+                
+                // Reset button
+                const btn = document.getElementById('generateDivisionsBtn');
+                btn.innerHTML = '<i class="bi bi-lightning-fill me-2"></i>Generate Divisions';
+                btn.disabled = false;
             }
         }
         
-        // Create mock divisions (replace with real API call)
-        function createMockDivisions(searchAreaCoords, bounds) {
-            const divisions = [];
-            const divisionNames = ['A', 'B', 'C', 'D'];
-            const teams = ['Team Alpha', 'Team Bravo', null, 'Team Charlie'];
-            const statuses = ['assigned', 'assigned', 'unassigned', 'completed'];
-            const priorities = ['High', 'High', 'Medium', 'Low'];
-            
-            // Create a simple grid within the search area
-            const centerLat = bounds.getCenter().lat;
-            const centerLng = bounds.getCenter().lng;
-            const latSpan = bounds.getNorth() - bounds.getSouth();
-            const lngSpan = bounds.getEast() - bounds.getWest();
-            
-            // Create 4 quadrants
-            for (let i = 0; i < 4; i++) {
-                const isTop = i < 2;
-                const isLeft = i % 2 === 0;
-                
-                const latOffset = isTop ? latSpan * 0.25 : -latSpan * 0.25;
-                const lngOffset = isLeft ? -lngSpan * 0.25 : lngSpan * 0.25;
-                
-                const divCenter = [centerLat + latOffset, centerLng + lngOffset];
-                const size = Math.min(latSpan, lngSpan) * 0.3;
-                
-                // Create rectangle around the center point
-                const coordinates = [
-                    [divCenter[0] - size/2, divCenter[1] - size/2],
-                    [divCenter[0] + size/2, divCenter[1] - size/2],
-                    [divCenter[0] + size/2, divCenter[1] + size/2],
-                    [divCenter[0] - size/2, divCenter[1] + size/2],
-                    [divCenter[0] - size/2, divCenter[1] - size/2]
-                ];
-                
-                divisions.push({
-                    division_id: `DIV-${divisionNames[i]}`,
-                    division_name: `Division ${divisionNames[i]}`,
-                    name: divisionNames[i],
-                    coordinates: coordinates,
-                    status: statuses[i],
-                    team: teams[i],
-                    area_size: `~${(40000 + Math.random() * 10000).toFixed(0)} m²`,
-                    priority: priorities[i]
-                });
+        // Create incident
+        async function createIncident() {
+            if (!checkFormReadiness()) {
+                showStatus('Please fill in all required fields and set incident location', 'error');
+                return;
             }
             
-            return divisions;
+            const formData = new FormData(document.getElementById('incidentForm'));
+            
+            try {
+                const btn = document.getElementById('createIncidentBtn');
+                btn.innerHTML = '<i class="bi bi-hourglass-split me-2"></i>Creating Incident...';
+                btn.disabled = true;
+                
+                const incidentPayload = {
+                    name: formData.get('name'),
+                    incident_type: formData.get('incident_type'),
+                    description: formData.get('description'),
+                    latitude: incidentLocation.latitude,
+                    longitude: incidentLocation.longitude,
+                    address: incidentLocation.address,
+                    hospital_data: hospitalData
+                };
+                
+                // Add search area if defined
+                if (searchAreaPolygon) {
+                    const coords = searchAreaPolygon.getLatLngs()[0];
+                    incidentPayload.search_area_coordinates = coords.map(coord => [coord.lng, coord.lat]);
+                }
+                
+                // Add divisions if generated
+                if (generatedDivisions) {
+                    incidentPayload.divisions = generatedDivisions;
+                }
+                
+                const response = await fetch('/api/incident', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(incidentPayload)
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showStatus(`Incident created successfully: ${data.incident_id}`, 'success');
+                    
+                    // Disable form and redirect or show success state
+                    document.getElementById('incidentForm').querySelectorAll('input, select, textarea').forEach(el => el.disabled = true);
+                    btn.innerHTML = '<i class="bi bi-check-circle me-2"></i>Incident Created';
+                    
+                    // Optional: redirect to incident view
+                    setTimeout(() => {
+                        window.location.href = `/incident/${data.incident_id}`;
+                    }, 2000);
+                } else {
+                    showStatus(data.error, 'error');
+                    btn.innerHTML = '<i class="bi bi-plus-circle me-2"></i>Create Incident';
+                    btn.disabled = false;
+                }
+            } catch (error) {
+                showStatus('Error creating incident: ' + error.message, 'error');
+                
+                const btn = document.getElementById('createIncidentBtn');
+                btn.innerHTML = '<i class="bi bi-plus-circle me-2"></i>Create Incident';
+                btn.disabled = false;
+            }
         }
         
         // Handle location button click
