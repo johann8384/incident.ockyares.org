@@ -140,9 +140,39 @@ def search_hospitals():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/divisions/generate", methods=["POST"])
+def generate_divisions_preview():
+    """Generate search divisions for preview (without saving to database)"""
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        if not data.get("coordinates") or len(data.get("coordinates", [])) < 3:
+            return jsonify({"error": "Search area coordinates required (minimum 3 points)"}), 400
+            
+        # Create temporary incident instance for division generation
+        incident = Incident(db_manager)
+        
+        # Generate divisions without saving
+        divisions = incident.generate_divisions_preview(
+            search_area_coordinates=data["coordinates"],
+            area_size_m2=data.get("area_size_m2", 40000)
+        )
+        
+        return jsonify({
+            "success": True,
+            "divisions": divisions,
+            "count": len(divisions),
+            "message": f"Generated {len(divisions)} search divisions for preview"
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/incident", methods=["POST"])
 def create_incident():
-    """Create new incident with full data including location and hospitals"""
+    """Create new incident with full data including location, hospitals, and divisions"""
     try:
         data = request.get_json()
 
@@ -159,7 +189,9 @@ def create_incident():
             latitude=data.get("latitude"),
             longitude=data.get("longitude"),
             address=data.get("address"),
-            hospital_data=data.get("hospital_data")
+            hospital_data=data.get("hospital_data"),
+            search_area_coordinates=data.get("search_area_coordinates"),
+            divisions=data.get("divisions")  # Save divisions if provided
         )
 
         return jsonify(
@@ -277,23 +309,27 @@ def save_hospital_data(incident_id):
 
 
 @app.route("/api/incident/<incident_id>/divisions", methods=["POST"])
-def generate_divisions(incident_id):
-    """Generate search divisions"""
+def save_divisions(incident_id):
+    """Save search divisions for existing incident"""
     try:
+        data = request.get_json()
+        
+        if not data.get("divisions"):
+            return jsonify({"error": "Divisions data is required"}), 400
+            
         incident = Incident.get_incident_by_id(incident_id, db_manager)
         if not incident:
             return jsonify({"error": "Incident not found"}), 404
 
-        divisions = incident.generate_divisions()
-
-        return jsonify(
-            {
+        success = incident.save_divisions(data["divisions"])
+        
+        if success:
+            return jsonify({
                 "success": True,
-                "divisions": divisions,
-                "count": len(divisions),
-                "message": f"Generated {len(divisions)} search divisions",
-            }
-        )
+                "message": f"Saved {len(data['divisions'])} divisions successfully"
+            })
+        else:
+            return jsonify({"error": "Failed to save divisions"}), 500
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
