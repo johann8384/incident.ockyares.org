@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Emergency Incident Management - Create Incident</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .header { background: #d32f2f; color: white; padding: 20px; border-radius: 8px 8px 0 0; }
+        .content { padding: 20px; }
+        .form-group { margin-bottom: 15px; }
+        .form-row { display: flex; gap: 15px; }
+        .form-row .form-group { flex: 1; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input, select, textarea { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
+        textarea { height: 80px; resize: vertical; }
+        #map { height: 500px; width: 100%; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 15px; }
+        .button-group { display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap; }
+        .btn { padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        .btn-primary { background: #1976d2; color: white; }
+        .btn-secondary { background: #757575; color: white; }
+        .btn-success { background: #388e3c; color: white; }
+        .btn-warning { background: #f57c00; color: white; }
+        .btn-danger { background: #d32f2f; color: white; }
+        .btn:hover { opacity: 0.9; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .status { padding: 10px; border-radius: 4px; margin-bottom: 15px; display: none; }
+        .status.success { background: #e8f5e8; color: #2e7d32; border: 1px solid #4caf50; }
+        .status.error { background: #ffebee; color: #c62828; border: 1px solid #f44336; }
+        .incident-info { background: #f5f5f5; padding: 15px; border-radius: 4px; margin-bottom: 15px; }
+        .divisions-info { background: #e3f2fd; padding: 15px; border-radius: 4px; margin-top: 15px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚨 Emergency Incident Management System</h1>
+            <p>Create and manage wide area search incidents</p>
+        </div>
+        
+        <div class="content">
+            <div id="status" class="status"></div>
+            
+            <form id="incidentForm">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="incidentName">Incident Name *</label>
+                        <input type="text" id="incidentName" name="name" required placeholder="Enter incident name">
+                    </div>
+                    <div class="form-group">
+                        <label for="incidentType">Incident Type *</label>
+                        <select id="incidentType" name="incident_type" required>
+                            <option value="">Select incident type</option>
+                            <option value="Urban Search">Urban Search</option>
+                            <option value="Wilderness Search">Wilderness Search</option>
+                            <option value="Building Collapse">Building Collapse</option>
+                            <option value="Natural Disaster">Natural Disaster</option>
+                            <option value="Hazmat">Hazmat</option>
+                            <option value="Explosion">Explosion</option>
+                            <option value="Other">Other</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="description">Description</label>
+                    <textarea id="description" name="description" placeholder="Enter incident description and any relevant details"></textarea>
+                </div>
+            </form>
+            
+            <div class="incident-info" id="incidentInfo" style="display: none;">
+                <h3>📍 Incident Details</h3>
+                <div id="incidentDetails"></div>
+            </div>
+            
+            <h3>🗺️ Incident Location & Search Area</h3>
+            <div class="button-group">
+                <button class="btn btn-primary" id="setLocationBtn" disabled>📍 Set Incident Location</button>
+                <button class="btn btn-warning" id="drawAreaBtn" disabled>🔲 Draw Search Area</button>
+                <button class="btn btn-danger" id="clearAreaBtn" disabled>🗑️ Clear Search Area</button>
+                <button class="btn btn-success" id="generateDivisionsBtn" disabled>⚡ Generate Divisions</button>
+            </div>
+            
+            <div id="map"></div>
+            
+            <div class="divisions-info" id="divisionsInfo" style="display: none;">
+                <h3>📊 Search Divisions</h3>
+                <div id="divisionsDetails"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+    <script>
+        let map, incidentMarker, searchAreaLayer, divisionsGroup;
+        let currentIncidentId = null;
+        let isLocationMode = false;
+        let isDrawMode = false;
+        let drawControl = null;
+        
+        // Initialize map
+        function initMap() {
+            map = L.map('map').setView([37.7749, -122.4194], 13); // Default to San Francisco
+            
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
+            
+            // Initialize feature groups
+            searchAreaLayer = new L.FeatureGroup();
+            divisionsGroup = new L.FeatureGroup();
+            map.addLayer(searchAreaLayer);
+            map.addLayer(divisionsGroup);
+        }
+        
+        // Show status message
+        function showStatus(message, type = 'success') {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = `status ${type}`;
+            status.style.display = 'block';
+            setTimeout(() => {
+                status.style.display = 'none';
+            }, 5000);
+        }
+        
+        // Create incident
+        async function createIncident() {
+            const form = document.getElementById('incidentForm');
+            const formData = new FormData(form);
+            
+            if (!formData.get('name') || !formData.get('incident_type')) {
+                showStatus('Please fill in all required fields', 'error');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/incident', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: formData.get('name'),
+                        incident_type: formData.get('incident_type'),
+                        description: formData.get('description')
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    currentIncidentId = data.incident_id;
+                    showStatus(`Incident created: ${data.incident_id}`, 'success');
+                    updateIncidentInfo(formData);
+                    enableMapControls();
+                } else {
+                    showStatus(data.error, 'error');
+                }
+            } catch (error) {
+                showStatus('Error creating incident: ' + error.message, 'error');
+            }
+        }
+        
+        // Update incident info display
+        function updateIncidentInfo(formData) {
+            const info = document.getElementById('incidentInfo');
+            const details = document.getElementById('incidentDetails');
+            
+            details.innerHTML = `
+                <p><strong>ID:</strong> ${currentIncidentId}</p>
+                <p><strong>Name:</strong> ${formData.get('name')}</p>
+                <p><strong>Type:</strong> ${formData.get('incident_type')}</p>
+                <p><strong>Description:</strong> ${formData.get('description') || 'None'}</p>
+            `;
+            info.style.display = 'block';
+        }
+        
+        // Enable map controls after incident creation
+        function enableMapControls() {
+            document.getElementById('setLocationBtn').disabled = false;
+            document.getElementById('drawAreaBtn').disabled = false;
+            document.getElementById('clearAreaBtn').disabled = false;
+        }
+        
+        // Set incident location mode
+        function setLocationMode() {
+            if (!currentIncidentId) return;
+            
+            isLocationMode = true;
+            document.getElementById('setLocationBtn').textContent = '📍 Click map to set location';
+            document.getElementById('setLocationBtn').classList.remove('btn-primary');
+            document.getElementById('setLocationBtn').classList.add('btn-warning');
+            showStatus('Click on the map to set incident location', 'success');
+        }
+        
+        // Set incident location
+        async function setIncidentLocation(lat, lng) {
+            try {
+                const response = await fetch(`/api/incident/${currentIncidentId}/location`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ latitude: lat, longitude: lng })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Remove existing marker
+                    if (incidentMarker) {
+                        map.removeLayer(incidentMarker);
+                    }
+                    
+                    // Add new marker
+                    incidentMarker = L.marker([lat, lng]).addTo(map);
+                    incidentMarker.bindPopup(`<b>Incident Location</b><br>${data.address || 'Location set'}`);
+                    
+                    showStatus(`Location set: ${data.address || `${lat.toFixed(6)}, ${lng.toFixed(6)}`}`, 'success');
+                    
+                    // Reset button
+                    document.getElementById('setLocationBtn').textContent = '📍 Set Incident Location';
+                    document.getElementById('setLocationBtn').classList.remove('btn-warning');
+                    document.getElementById('setLocationBtn').classList.add('btn-primary');
+                    isLocationMode = false;
+                } else {
+                    showStatus(data.error, 'error');
+                }
+            } catch (error) {
+                showStatus('Error setting location: ' + error.message, 'error');
+            }
+        }
+        
+        // Enable drawing mode
+        function enableDrawMode() {
+            if (!currentIncidentId) return;
+            
+            if (drawControl) {
+                map.removeControl(drawControl);
+            }
+            
+            drawControl = new L.Control.Draw({
+                edit: {
+                    featureGroup: searchAreaLayer,
+                    remove: false
+                },
+                draw: {
+                    rectangle: false,
+                    circle: false,
+                    circlemarker: false,
+                    marker: false,
+                    polyline: false,
+                    polygon: {
+                        allowIntersection: false,
+                        drawError: {
+                            color: '#e1e100',
+                            message: '<strong>Error:</strong> Polygon cannot intersect!'
+                        },
+                        shapeOptions: {
+                            color: '#ff0000',
+                            weight: 3,
+                            fillOpacity: 0.2
+                        }
+                    }
+                }
+            });
+            
+            map.addControl(drawControl);
+            isDrawMode = true;
+            showStatus('Draw a polygon to define the search area', 'success');
+        }
+        
+        // Clear search area
+        function clearSearchArea() {
+            searchAreaLayer.clearLayers();
+            divisionsGroup.clearLayers();
+            if (drawControl) {
+                map.removeControl(drawControl);
+                drawControl = null;
+            }
+            document.getElementById('generateDivisionsBtn').disabled = true;
+            document.getElementById('divisionsInfo').style.display = 'none';
+            showStatus('Search area cleared', 'success');
+        }
+        
+        // Set search area
+        async function setSearchArea(coordinates) {
+            try {
+                const response = await fetch(`/api/incident/${currentIncidentId}/search-area`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ coordinates: coordinates })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showStatus('Search area defined successfully', 'success');
+                    document.getElementById('generateDivisionsBtn').disabled = false;
+                } else {
+                    showStatus(data.error, 'error');
+                }
+            } catch (error) {
+                showStatus('Error setting search area: ' + error.message, 'error');
+            }
+        }
+        
+        // Generate divisions
+        async function generateDivisions() {
+            try {
+                const response = await fetch(`/api/incident/${currentIncidentId}/divisions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showStatus(`Generated ${data.count} search divisions`, 'success');
+                    
+                    // Display divisions info
+                    const info = document.getElementById('divisionsInfo');
+                    const details = document.getElementById('divisionsDetails');
+                    
+                    details.innerHTML = `
+                        <p><strong>Divisions Created:</strong> ${data.count}</p>
+                        <p><strong>Coverage:</strong> Optimized for 4-person teams (40,000 m² per division)</p>
+                        <p><strong>Strategy:</strong> Aligned with road network for systematic search</p>
+                    `;
+                    info.style.display = 'block';
+                    
+                    // TODO: Display divisions on map when backend provides coordinates
+                    
+                } else {
+                    showStatus(data.error, 'error');
+                }
+            } catch (error) {
+                showStatus('Error generating divisions: ' + error.message, 'error');
+            }
+        }
+        
+        // Event listeners
+        document.addEventListener('DOMContentLoaded', function() {
+            initMap();
+            
+            // Form submission
+            document.getElementById('incidentForm').addEventListener('change', createIncident);
+            
+            // Map controls
+            document.getElementById('setLocationBtn').addEventListener('click', setLocationMode);
+            document.getElementById('drawAreaBtn').addEventListener('click', enableDrawMode);
+            document.getElementById('clearAreaBtn').addEventListener('click', clearSearchArea);
+            document.getElementById('generateDivisionsBtn').addEventListener('click', generateDivisions);
+            
+            // Map click for location setting
+            map.on('click', function(e) {
+                if (isLocationMode) {
+                    setIncidentLocation(e.latlng.lat, e.latlng.lng);
+                }
+            });
+            
+            // Drawing events
+            map.on(L.Draw.Event.CREATED, function(e) {
+                const layer = e.layer;
+                searchAreaLayer.addLayer(layer);
+                
+                // Get coordinates for polygon
+                const coordinates = layer.getLatLngs()[0].map(latlng => [latlng.lng, latlng.lat]);
+                setSearchArea(coordinates);
+                
+                if (drawControl) {
+                    map.removeControl(drawControl);
+                    drawControl = null;
+                }
+                isDrawMode = false;
+            });
+        });
+    </script>
+</body>
+</html>
