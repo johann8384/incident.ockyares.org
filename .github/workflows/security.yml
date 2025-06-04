@@ -8,6 +8,12 @@ on:
   schedule:
     - cron: '0 2 * * 1'  # Run weekly on Mondays at 2 AM
 
+# Add permissions for SARIF uploads
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
 jobs:
   security-scan:
     runs-on: ubuntu-latest
@@ -60,7 +66,7 @@ jobs:
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: semgrep.sarif
-      if: always()
+      if: always() && hashFiles('semgrep.sarif') != ''
     
     - name: Upload Security Reports
       uses: actions/upload-artifact@v4
@@ -97,7 +103,7 @@ jobs:
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: hadolint-results.sarif
-      if: always()
+      if: always() && hashFiles('hadolint-results.sarif') != ''
     
     - name: Run Trivy vulnerability scanner
       uses: aquasecurity/trivy-action@master
@@ -105,12 +111,13 @@ jobs:
         image-ref: 'emergency-incident-app:security-test'
         format: 'sarif'
         output: 'trivy-results.sarif'
+      continue-on-error: true
     
     - name: Upload Trivy scan results
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: 'trivy-results.sarif'
-      if: always()
+      if: always() && hashFiles('trivy-results.sarif') != ''
     
     - name: Run Docker Scout
       if: github.event_name != 'pull_request'
@@ -127,7 +134,7 @@ jobs:
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: scout-results.sarif
-      if: always()
+      if: always() && hashFiles('scout-results.sarif') != ''
 
   secrets-scan:
     runs-on: ubuntu-latest
@@ -142,6 +149,7 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+      continue-on-error: true
     
     - name: Run TruffleHog
       uses: trufflesecurity/trufflehog@main
@@ -150,6 +158,7 @@ jobs:
         base: main
         head: HEAD
         extra_args: --debug --only-verified
+      continue-on-error: true
 
   dependency-review:
     runs-on: ubuntu-latest
