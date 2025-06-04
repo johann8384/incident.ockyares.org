@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, jsonify
 from dotenv import load_dotenv
 import os
+import requests
 
 from models.database import DatabaseManager
 from models.incident import Incident
@@ -26,6 +27,72 @@ def index():
 def view_incident(incident_id):
     """View specific incident"""
     return render_template("incident_view.html", incident_id=incident_id)
+
+
+@app.route("/api/geocode/reverse", methods=["POST"])
+def reverse_geocode():
+    """Reverse geocode coordinates to address"""
+    try:
+        data = request.get_json()
+        
+        latitude = data.get("latitude")
+        longitude = data.get("longitude")
+        
+        if latitude is None or longitude is None:
+            return jsonify({"error": "Latitude and longitude are required"}), 400
+        
+        # Convert to float
+        try:
+            latitude = float(latitude)
+            longitude = float(longitude)
+        except (ValueError, TypeError):
+            return jsonify({"error": "Invalid latitude or longitude values"}), 400
+        
+        # Make request to Nominatim
+        try:
+            nominatim_url = "https://nominatim.openstreetmap.org/reverse"
+            params = {
+                'format': 'json',
+                'lat': latitude,
+                'lon': longitude,
+                'zoom': 18,
+                'addressdetails': 1
+            }
+            
+            headers = {
+                'User-Agent': 'EmergencyIncidentApp/1.0 (Emergency Management System)'
+            }
+            
+            response = requests.get(nominatim_url, params=params, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                geocode_data = response.json()
+                address = geocode_data.get('display_name')
+                
+                return jsonify({
+                    "success": True,
+                    "address": address,
+                    "data": geocode_data
+                })
+            else:
+                return jsonify({
+                    "success": False,
+                    "error": f"Geocoding service returned status {response.status_code}"
+                }), 500
+                
+        except requests.exceptions.Timeout:
+            return jsonify({
+                "success": False,
+                "error": "Geocoding request timed out"
+            }), 500
+        except requests.exceptions.RequestException as e:
+            return jsonify({
+                "success": False,
+                "error": f"Geocoding request failed: {str(e)}"
+            }), 500
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/hospitals/search", methods=["POST"])
