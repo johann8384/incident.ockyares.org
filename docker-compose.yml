@@ -36,10 +36,20 @@ services:
       SEARCH_AREA_SIZE_M2: 40000
       TEAM_SIZE: 4
       NOMINATIM_URL: https://nominatim.openstreetmap.org
-      FLASK_ENV: production
-      FLASK_DEBUG: false
+      FLASK_ENV: development
+      FLASK_DEBUG: true
+      PYTHONPATH: /app
     volumes:
-      - ./logs:/app/logs
+      # Mount source code for development
+      - .:/app:rw
+      - ./logs:/app/logs:rw
+      # Exclude node_modules and other build artifacts
+      - /app/__pycache__
+      - /app/.pytest_cache
+      - /app/htmlcov
+    working_dir: /app
+    ports:
+      - "5000:5000"
     networks:
       - incident_network
     depends_on:
@@ -51,8 +61,10 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    # Override CMD for development with auto-reload
+    command: ["python", "-m", "flask", "run", "--host=0.0.0.0", "--port=5000", "--debug"]
 
-  # Nginx Reverse Proxy
+  # Nginx Reverse Proxy (optional for development)
   nginx:
     image: nginx:alpine
     container_name: incident_nginx
@@ -68,6 +80,8 @@ services:
       app:
         condition: service_healthy
     restart: unless-stopped
+    profiles:
+      - production  # Only start nginx with --profile production
 
 volumes:
   postgres_data:
