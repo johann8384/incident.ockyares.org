@@ -4,6 +4,7 @@ import os
 
 from models.database import DatabaseManager
 from models.incident import Incident
+from models.hospital import Hospital
 
 # Load environment variables
 load_dotenv()
@@ -25,6 +26,51 @@ def index():
 def view_incident(incident_id):
     """View specific incident"""
     return render_template("incident_view.html", incident_id=incident_id)
+
+
+@app.route("/api/hospitals/search", methods=["POST"])
+def search_hospitals():
+    """Search for hospitals near a location using server-side API call"""
+    try:
+        data = request.get_json()
+        
+        latitude = data.get("latitude")
+        longitude = data.get("longitude")
+        
+        if latitude is None or longitude is None:
+            return jsonify({"error": "Latitude and longitude are required"}), 400
+        
+        # Convert to float
+        try:
+            latitude = float(latitude)
+            longitude = float(longitude)
+        except (ValueError, TypeError):
+            return jsonify({"error": "Invalid latitude or longitude values"}), 400
+        
+        # Get hospital data using the hospital model
+        hospital_manager = Hospital(db_manager)
+        result = hospital_manager.get_hospitals_for_location(
+            latitude=latitude,
+            longitude=longitude,
+            use_cache=True
+        )
+        
+        if result['success']:
+            return jsonify({
+                "success": True,
+                "hospitals": result['hospitals'],
+                "total_found": result['total_found'],
+                "source": result['source']
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": result.get('error', 'Unknown error'),
+                "hospitals": {}
+            }), 500
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/incident", methods=["POST"])
