@@ -81,14 +81,12 @@ class Incident:
             
             update_query = """
             UPDATE incidents 
-            SET search_area = ST_GeomFromText(%s, 4326),
-                search_area_coordinates = %s
+            SET search_area = ST_GeomFromText(%s, 4326)
             WHERE incident_id = %s
             """
             
             self.db.execute_query(update_query, (
                 search_area_wkt, 
-                json.dumps(search_area_coordinates), 
                 self.incident_id
             ))
 
@@ -220,12 +218,11 @@ class Incident:
             # Update database
             query = """
             UPDATE incidents 
-            SET search_area = ST_GeomFromText(%s, 4326),
-                search_area_coordinates = %s
+            SET search_area = ST_GeomFromText(%s, 4326)
             WHERE incident_id = %s
             """
 
-            self.db.execute_query(query, (polygon_wkt, json.dumps(coordinates), self.incident_id))
+            self.db.execute_query(query, (polygon_wkt, self.incident_id))
 
             return True
 
@@ -255,7 +252,6 @@ class Incident:
                 ST_X(incident_location) as longitude,
                 ST_Y(incident_location) as latitude,
                 ST_AsGeoJSON(search_area) as search_area_geojson,
-                search_area_coordinates,
                 created_at, updated_at, status
             FROM incidents
             WHERE incident_id = %s
