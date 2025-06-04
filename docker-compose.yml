@@ -10,7 +10,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: emergency_password
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ./docker/database/data:/var/lib/postgresql/data
       - ./docker/database/init:/docker-entrypoint-initdb.d
     ports:
       - "5432:5432"
@@ -82,9 +82,6 @@ services:
     restart: unless-stopped
 #    profiles:
 #      - production  # Only start nginx with --profile production
-
-volumes:
-  postgres_data:
 
 networks:
   incident_network:
