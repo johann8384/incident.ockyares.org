@@ -91,6 +91,21 @@
                             <div id="incidentDetails"></div>
                         </div>
                         
+                        <!-- Hospital Info -->
+                        <div class="alert alert-warning d-none" id="hospitalInfo" role="alert">
+                            <h5 class="alert-heading">
+                                <i class="bi bi-hospital me-2"></i>Nearby Hospital Information
+                            </h5>
+                            <div id="hospitalDetails">
+                                <div class="text-center">
+                                    <div class="spinner-border spinner-border-sm me-2" role="status">
+                                        <span class="visually-hidden">Loading...</span>
+                                    </div>
+                                    Loading hospital data...
+                                </div>
+                            </div>
+                        </div>
+                        
                         <!-- Map Section -->
                         <div class="card mb-4">
                             <div class="card-header">
@@ -163,6 +178,7 @@
         let drawingPoints = [];
         let currentDrawingLine = null;
         let searchAreaPolygon = null;
+        let hospitalData = null;
         
         // Initialize map
         function initMap() {
@@ -212,6 +228,208 @@
             return isReady;
         }
         
+        // Calculate distance between two points (Haversine formula)
+        function calculateDistance(lat1, lng1, lat2, lng2) {
+            const R = 6371; // Earth's radius in kilometers
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLng = (lng2 - lng1) * Math.PI / 180;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                    Math.sin(dLng/2) * Math.sin(dLng/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return R * c; // Distance in kilometers
+        }
+        
+        // Fetch hospital data from ArcGIS service
+        async function fetchHospitalData(lat, lng) {
+            try {
+                const url = 'https://services1.arcgis.com/Hp6G80Pky0om7QvQ/arcgis/rest/services/Hospitals_gdb/FeatureServer/0/query';
+                const params = new URLSearchParams({
+                    where: '1=1',
+                    outFields: '*',
+                    f: 'json',
+                    returnGeometry: 'true'
+                });
+                
+                const response = await fetch(`${url}?${params}`);
+                const data = await response.json();
+                
+                if (!data.features || data.features.length === 0) {
+                    throw new Error('No hospital data available');
+                }
+                
+                // Calculate distances and add to each hospital
+                const hospitalsWithDistance = data.features.map(feature => {
+                    const hospitalLat = feature.geometry.y;
+                    const hospitalLng = feature.geometry.x;
+                    const distance = calculateDistance(lat, lng, hospitalLat, hospitalLng);
+                    
+                    return {
+                        ...feature,
+                        distance: distance,
+                        attributes: {
+                            ...feature.attributes,
+                            distance: distance
+                        }
+                    };
+                });
+                
+                // Sort by distance
+                hospitalsWithDistance.sort((a, b) => a.distance - b.distance);
+                
+                return hospitalsWithDistance;
+                
+            } catch (error) {
+                console.error('Error fetching hospital data:', error);
+                throw error;
+            }
+        }
+        
+        // Find specific hospitals
+        function findHospitals(hospitals, lat, lng) {
+            // Closest hospital overall
+            const closestHospital = hospitals[0];
+            
+            // Closest Level I trauma center
+            const closestLevel1 = hospitals.find(h => 
+                h.attributes.TRAUMA && 
+                (h.attributes.TRAUMA.toUpperCase().includes('LEVEL I') || 
+                 h.attributes.TRAUMA.toUpperCase().includes('LEVEL 1'))
+            );
+            
+            // Closest Level 1 Pediatric trauma center
+            const closestPediatric = hospitals.find(h => 
+                h.attributes.TRAUMA && 
+                h.attributes.TRAUMA.toUpperCase().includes('PEDIATRIC') &&
+                (h.attributes.TRAUMA.toUpperCase().includes('LEVEL I') || 
+                 h.attributes.TRAUMA.toUpperCase().includes('LEVEL 1'))
+            );
+            
+            return {
+                closest: closestHospital,
+                level1: closestLevel1,
+                pediatric: closestPediatric
+            };
+        }
+        
+        // Display hospital information
+        function displayHospitalInfo(hospitals) {
+            const details = document.getElementById('hospitalDetails');
+            
+            let html = '<div class="row g-3">';
+            
+            // Closest Hospital
+            if (hospitals.closest) {
+                const h = hospitals.closest.attributes;
+                html += `
+                    <div class="col-md-4">
+                        <div class="card border-primary">
+                            <div class="card-header bg-primary text-white">
+                                <h6 class="card-title mb-0">
+                                    <i class="bi bi-geo-alt me-2"></i>Closest Hospital
+                                </h6>
+                            </div>
+                            <div class="card-body">
+                                <h6 class="card-title">${h.NAME || 'Unknown'}</h6>
+                                <p class="card-text small">
+                                    <strong>Distance:</strong> ${hospitals.closest.distance.toFixed(1)} km<br>
+                                    <strong>Trauma Level:</strong> ${h.TRAUMA || 'Not specified'}<br>
+                                    <strong>Address:</strong> ${h.ADDRESS || 'Not available'}<br>
+                                    <strong>City:</strong> ${h.CITY || 'Not available'}<br>
+                                    <strong>Phone:</strong> ${h.TELEPHONE || 'Not available'}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Closest Level I
+            if (hospitals.level1) {
+                const h = hospitals.level1.attributes;
+                html += `
+                    <div class="col-md-4">
+                        <div class="card border-success">
+                            <div class="card-header bg-success text-white">
+                                <h6 class="card-title mb-0">
+                                    <i class="bi bi-heart-pulse me-2"></i>Closest Level I
+                                </h6>
+                            </div>
+                            <div class="card-body">
+                                <h6 class="card-title">${h.NAME || 'Unknown'}</h6>
+                                <p class="card-text small">
+                                    <strong>Distance:</strong> ${hospitals.level1.distance.toFixed(1)} km<br>
+                                    <strong>Trauma Level:</strong> ${h.TRAUMA || 'Not specified'}<br>
+                                    <strong>Address:</strong> ${h.ADDRESS || 'Not available'}<br>
+                                    <strong>City:</strong> ${h.CITY || 'Not available'}<br>
+                                    <strong>Phone:</strong> ${h.TELEPHONE || 'Not available'}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                html += `
+                    <div class="col-md-4">
+                        <div class="card border-warning">
+                            <div class="card-header bg-warning">
+                                <h6 class="card-title mb-0">
+                                    <i class="bi bi-heart-pulse me-2"></i>Closest Level I
+                                </h6>
+                            </div>
+                            <div class="card-body">
+                                <p class="card-text text-muted">No Level I trauma center found in the area.</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Closest Pediatric Level 1
+            if (hospitals.pediatric) {
+                const h = hospitals.pediatric.attributes;
+                html += `
+                    <div class="col-md-4">
+                        <div class="card border-info">
+                            <div class="card-header bg-info text-white">
+                                <h6 class="card-title mb-0">
+                                    <i class="bi bi-heart me-2"></i>Closest Pediatric Level I
+                                </h6>
+                            </div>
+                            <div class="card-body">
+                                <h6 class="card-title">${h.NAME || 'Unknown'}</h6>
+                                <p class="card-text small">
+                                    <strong>Distance:</strong> ${hospitals.pediatric.distance.toFixed(1)} km<br>
+                                    <strong>Trauma Level:</strong> ${h.TRAUMA || 'Not specified'}<br>
+                                    <strong>Address:</strong> ${h.ADDRESS || 'Not available'}<br>
+                                    <strong>City:</strong> ${h.CITY || 'Not available'}<br>
+                                    <strong>Phone:</strong> ${h.TELEPHONE || 'Not available'}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                html += `
+                    <div class="col-md-4">
+                        <div class="card border-warning">
+                            <div class="card-header bg-warning">
+                                <h6 class="card-title mb-0">
+                                    <i class="bi bi-heart me-2"></i>Closest Pediatric Level I
+                                </h6>
+                            </div>
+                            <div class="card-body">
+                                <p class="card-text text-muted">No Level I pediatric trauma center found in the area.</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            html += '</div>';
+            details.innerHTML = html;
+        }
+        
         // Reverse geocode coordinates to address
         async function reverseGeocode(lat, lng) {
             try {
@@ -258,18 +476,27 @@
                 incidentLocation = { latitude: lat, longitude: lng };
                 
                 // Show loading message
-                showStatus('Setting location and looking up address...', 'success');
+                showStatus('Setting location, looking up address and nearby hospitals...', 'success');
                 
-                // Attempt reverse geocoding
-                const address = await reverseGeocode(lat, lng);
+                // Show hospital info panel with loading state
+                document.getElementById('hospitalInfo').classList.remove('d-none');
+                
+                // Attempt reverse geocoding and hospital lookup in parallel
+                const [address, hospitals] = await Promise.all([
+                    reverseGeocode(lat, lng),
+                    fetchHospitalData(lat, lng)
+                ]);
+                
                 if (address) {
                     incidentLocation.address = address;
                     incidentMarker.bindPopup(`<b>Incident Location</b><br>${address}`);
-                    showStatus(`Location set: ${address}`, 'success');
                 } else {
                     incidentMarker.bindPopup(`<b>Incident Location</b><br>Lat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}`);
-                    showStatus(`Location set: ${lat.toFixed(6)}, ${lng.toFixed(6)}`, 'success');
                 }
+                
+                // Process hospital data
+                hospitalData = findHospitals(hospitals, lat, lng);
+                displayHospitalInfo(hospitalData);
                 
                 // Update incident info display
                 updateIncidentLocationDisplay();
@@ -287,8 +514,12 @@
                 // Check if form is ready
                 checkFormReadiness();
                 
+                showStatus(`Location set with hospital data loaded`, 'success');
+                
             } catch (error) {
                 showStatus('Error setting location: ' + error.message, 'error');
+                // Hide hospital info on error
+                document.getElementById('hospitalInfo').classList.add('d-none');
             }
         }
         
@@ -444,17 +675,20 @@
             const formData = new FormData(document.getElementById('incidentForm'));
             
             try {
+                const incidentPayload = {
+                    name: formData.get('name'),
+                    incident_type: formData.get('incident_type'),
+                    description: formData.get('description'),
+                    latitude: incidentLocation.latitude,
+                    longitude: incidentLocation.longitude,
+                    address: incidentLocation.address,
+                    hospital_data: hospitalData // Include hospital data in incident
+                };
+                
                 const response = await fetch('/api/incident', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        name: formData.get('name'),
-                        incident_type: formData.get('incident_type'),
-                        description: formData.get('description'),
-                        latitude: incidentLocation.latitude,
-                        longitude: incidentLocation.longitude,
-                        address: incidentLocation.address
-                    })
+                    body: JSON.stringify(incidentPayload)
                 });
                 
                 const data = await response.json();
