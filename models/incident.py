@@ -75,8 +75,13 @@ class Incident:
 
         # Update with search area if provided
         if search_area_coordinates and len(search_area_coordinates) >= 3:
+            # Ensure polygon is closed
+            coords = search_area_coordinates.copy()
+            if coords[0] != coords[-1]:
+                coords.append(coords[0])
+            
             # Convert lng,lat to lat,lng and create WKT
-            coords_str = ", ".join([f"{coord[0]} {coord[1]}" for coord in search_area_coordinates])
+            coords_str = ", ".join([f"{coord[0]} {coord[1]}" for coord in coords])
             search_area_wkt = f"POLYGON(({coords_str}))"
             
             update_query = """
@@ -142,8 +147,13 @@ class Incident:
                         coordinates = geom_data['coordinates'][0]  # Get outer ring
                 
                 if coordinates:
+                    # Ensure polygon is closed
+                    coords = coordinates.copy()
+                    if coords[0] != coords[-1]:
+                        coords.append(coords[0])
+                    
                     # Convert coordinates to WKT
-                    coords_str = ", ".join([f"{coord[0]} {coord[1]}" for coord in coordinates])
+                    coords_str = ", ".join([f"{coord[0]} {coord[1]}" for coord in coords])
                     polygon_wkt = f"POLYGON(({coords_str}))"
 
                     query = """
@@ -211,8 +221,13 @@ class Incident:
             postgis_coords = [(lng, lat) for lat, lng in coordinates]
             self.search_area = Polygon(postgis_coords)
 
+            # Ensure polygon is closed
+            coords = coordinates.copy()
+            if coords[0] != coords[-1]:
+                coords.append(coords[0])
+
             # Convert to WKT for PostGIS
-            coords_str = ", ".join([f"{lng} {lat}" for lat, lng in coordinates])
+            coords_str = ", ".join([f"{lng} {lat}" for lat, lng in coords])
             polygon_wkt = f"POLYGON(({coords_str}))"
 
             # Update database
