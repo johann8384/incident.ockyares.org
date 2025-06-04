@@ -29,14 +29,15 @@ jobs:
         # Use docker compose (v2) instead of docker-compose
         docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from test_runner
     
-    - name: Extract coverage report
+    - name: Extract coverage reports
       run: |
-        # Extract XML coverage for codecov
-        docker compose -f docker-compose.test.yml run --rm test_runner \
-          python -m pytest tests/ --cov=app --cov=models --cov-report=xml --quiet || true
+        # Copy coverage reports from Docker volume
+        docker run --rm -v incidentockyaresorg_test_coverage:/src -v $(pwd):/dest alpine sh -c "
+          cp -r /src/* /dest/ 2>/dev/null || true
+        "
         
-        # Copy files from volume
-        docker run --rm -v test_coverage:/src alpine cp /src/coverage.xml /tmp/ 2>/dev/null || true
+        # Verify files were copied
+        ls -la coverage.xml htmlcov/ 2>/dev/null || echo "Coverage files not found"
     
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
@@ -46,6 +47,15 @@ jobs:
         name: codecov-umbrella
         fail_ci_if_error: false
       if: hashFiles('coverage.xml') != ''
+    
+    - name: Upload test artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-coverage
+        path: |
+          htmlcov/
+          coverage.xml
+      if: always()
     
     - name: Clean up
       if: always()
