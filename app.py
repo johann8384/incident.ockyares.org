@@ -29,7 +29,7 @@ def view_incident(incident_id):
 
 @app.route("/api/incident", methods=["POST"])
 def create_incident():
-    """Create new incident"""
+    """Create new incident with full data including location and hospitals"""
     try:
         data = request.get_json()
 
@@ -37,12 +37,16 @@ def create_incident():
         if not data.get("name") or not data.get("incident_type"):
             return jsonify({"error": "Name and incident type are required"}), 400
 
-        # Create incident
+        # Create incident with all available data
         incident = Incident(db_manager)
         incident_id = incident.create_incident(
             name=data["name"],
             incident_type=data["incident_type"],
             description=data.get("description", ""),
+            latitude=data.get("latitude"),
+            longitude=data.get("longitude"),
+            address=data.get("address"),
+            hospital_data=data.get("hospital_data")
         )
 
         return jsonify(
@@ -53,6 +57,24 @@ def create_incident():
             }
         )
 
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/incident/<incident_id>", methods=["GET"])
+def get_incident(incident_id):
+    """Get incident details including hospitals and divisions"""
+    try:
+        incident = Incident.get_incident_by_id(incident_id, db_manager)
+        if not incident:
+            return jsonify({"error": "Incident not found"}), 404
+        
+        incident_data = incident.get_incident_data()
+        return jsonify({
+            "success": True,
+            "incident": incident_data
+        })
+        
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -70,7 +92,8 @@ def set_incident_location(incident_id):
         incident.incident_id = incident_id
 
         success = incident.set_location(
-            latitude=float(data["latitude"]), longitude=float(data["longitude"])
+            latitude=float(data["latitude"]), 
+            longitude=float(data["longitude"])
         )
 
         if success:
@@ -114,15 +137,39 @@ def set_search_area(incident_id):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/incident/<incident_id>/hospitals", methods=["POST"])
+def save_hospital_data(incident_id):
+    """Save hospital data for incident"""
+    try:
+        data = request.get_json()
+        
+        if not data.get("hospital_data"):
+            return jsonify({"error": "Hospital data is required"}), 400
+        
+        incident = Incident(db_manager)
+        incident.incident_id = incident_id
+        
+        success = incident.save_hospital_data(data["hospital_data"])
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": "Hospital data saved successfully"
+            })
+        else:
+            return jsonify({"error": "Failed to save hospital data"}), 500
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/incident/<incident_id>/divisions", methods=["POST"])
 def generate_divisions(incident_id):
     """Generate search divisions"""
     try:
-        incident = Incident(db_manager)
-        incident.incident_id = incident_id
-
-        # Load incident data from database to get search area
-        # TODO: Add method to load existing incident
+        incident = Incident.get_incident_by_id(incident_id, db_manager)
+        if not incident:
+            return jsonify({"error": "Incident not found"}), 404
 
         divisions = incident.generate_divisions()
 
@@ -135,6 +182,25 @@ def generate_divisions(incident_id):
             }
         )
 
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/incident/<incident_id>/divisions", methods=["GET"])
+def get_divisions(incident_id):
+    """Get search divisions for incident"""
+    try:
+        incident = Incident(db_manager)
+        incident.incident_id = incident_id
+        
+        divisions = incident.get_divisions()
+        
+        return jsonify({
+            "success": True,
+            "divisions": divisions,
+            "count": len(divisions)
+        })
+        
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
