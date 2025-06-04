@@ -365,13 +365,13 @@
                                 </h6>
                             </div>
                             <div class="card-body">
-                                <h6 class="card-title">${h.NAME || 'Unknown'}</h6>
+                                <h6 class="card-title">${h.FACILITY || 'Unknown'}</h6>
                                 <p class="card-text small">
                                     <strong>Distance:</strong> ${hospitals.closest.distance.toFixed(1)} km<br>
-                                    <strong>Trauma Level:</strong> ${h.TRAUMA || 'Not specified'}<br>
+                                    <strong>Type:</strong> ${h.LIC_TYPE || 'Not specified'}<br>
                                     <strong>Address:</strong> ${h.ADDRESS || 'Not available'}<br>
                                     <strong>City:</strong> ${h.CITY || 'Not available'}<br>
-                                    <strong>Phone:</strong> ${h.TELEPHONE || 'Not available'}
+                                    <strong>Phone:</strong> ${h.PHONE || 'Not available'}
                                 </p>
                             </div>
                         </div>
@@ -379,25 +379,25 @@
                 `;
             }
             
-            // Closest Level I
-            if (hospitals.level1) {
-                const h = hospitals.level1.attributes;
+            // Closest Level 1 Trauma
+            if (hospitals.level1_trauma) {
+                const h = hospitals.level1_trauma.attributes;
                 html += `
                     <div class="col-md-4">
                         <div class="card border-success">
                             <div class="card-header bg-success text-white">
                                 <h6 class="card-title mb-0">
-                                    <i class="bi bi-heart-pulse me-2"></i>Closest Level I
+                                    <i class="bi bi-heart-pulse me-2"></i>Closest Level 1 Trauma
                                 </h6>
                             </div>
                             <div class="card-body">
-                                <h6 class="card-title">${h.NAME || 'Unknown'}</h6>
+                                <h6 class="card-title">${h.FACILITY || 'Unknown'}</h6>
                                 <p class="card-text small">
-                                    <strong>Distance:</strong> ${hospitals.level1.distance.toFixed(1)} km<br>
-                                    <strong>Trauma Level:</strong> ${h.TRAUMA || 'Not specified'}<br>
+                                    <strong>Distance:</strong> ${hospitals.level1_trauma.distance.toFixed(1)} km<br>
+                                    <strong>Type:</strong> ${h.LIC_TYPE || 'Not specified'}<br>
                                     <strong>Address:</strong> ${h.ADDRESS || 'Not available'}<br>
                                     <strong>City:</strong> ${h.CITY || 'Not available'}<br>
-                                    <strong>Phone:</strong> ${h.TELEPHONE || 'Not available'}
+                                    <strong>Phone:</strong> ${h.PHONE || 'Not available'}
                                 </p>
                             </div>
                         </div>
@@ -409,36 +409,36 @@
                         <div class="card border-warning">
                             <div class="card-header bg-warning">
                                 <h6 class="card-title mb-0">
-                                    <i class="bi bi-heart-pulse me-2"></i>Closest Level I
+                                    <i class="bi bi-heart-pulse me-2"></i>Closest Level 1 Trauma
                                 </h6>
                             </div>
                             <div class="card-body">
-                                <p class="card-text text-muted">No Level I trauma center found in the area.</p>
+                                <p class="card-text text-muted">No Level 1 trauma center found in the area.</p>
                             </div>
                         </div>
                     </div>
                 `;
             }
             
-            // Closest Pediatric Level 1
-            if (hospitals.pediatric) {
-                const h = hospitals.pediatric.attributes;
+            // Closest Level 1 Pediatric
+            if (hospitals.level1_pediatric) {
+                const h = hospitals.level1_pediatric.attributes;
                 html += `
                     <div class="col-md-4">
                         <div class="card border-info">
                             <div class="card-header bg-info text-white">
                                 <h6 class="card-title mb-0">
-                                    <i class="bi bi-heart me-2"></i>Closest Pediatric Level I
+                                    <i class="bi bi-heart me-2"></i>Closest Level 1 Pediatric
                                 </h6>
                             </div>
                             <div class="card-body">
-                                <h6 class="card-title">${h.NAME || 'Unknown'}</h6>
+                                <h6 class="card-title">${h.FACILITY || 'Unknown'}</h6>
                                 <p class="card-text small">
-                                    <strong>Distance:</strong> ${hospitals.pediatric.distance.toFixed(1)} km<br>
-                                    <strong>Trauma Level:</strong> ${h.TRAUMA || 'Not specified'}<br>
+                                    <strong>Distance:</strong> ${hospitals.level1_pediatric.distance.toFixed(1)} km<br>
+                                    <strong>Type:</strong> ${h.LIC_TYPE || 'Not specified'}<br>
                                     <strong>Address:</strong> ${h.ADDRESS || 'Not available'}<br>
                                     <strong>City:</strong> ${h.CITY || 'Not available'}<br>
-                                    <strong>Phone:</strong> ${h.TELEPHONE || 'Not available'}
+                                    <strong>Phone:</strong> ${h.PHONE || 'Not available'}
                                 </p>
                             </div>
                         </div>
@@ -450,11 +450,11 @@
                         <div class="card border-warning">
                             <div class="card-header bg-warning">
                                 <h6 class="card-title mb-0">
-                                    <i class="bi bi-heart me-2"></i>Closest Pediatric Level I
+                                    <i class="bi bi-heart me-2"></i>Closest Level 1 Pediatric
                                 </h6>
                             </div>
                             <div class="card-body">
-                                <p class="card-text text-muted">No Level I pediatric trauma center found in the area.</p>
+                                <p class="card-text text-muted">No Level 1 pediatric trauma center found in the area.</p>
                             </div>
                         </div>
                     </div>
