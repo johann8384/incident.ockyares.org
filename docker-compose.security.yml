@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  security_scanner:
+    build:
+      context: .
+      dockerfile: Dockerfile.security
+    volumes:
+      - .:/app:ro
+      - ./security-reports:/reports:rw
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # For Docker image scanning
+    working_dir: /app
+    environment:
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    command: /app/scripts/security_scan_docker.sh
+
+volumes:
+  security_reports:
