@@ -230,6 +230,47 @@
             return isReady;
         }
         
+        // Check if incident location is within search area polygon
+        function isIncidentLocationInSearchArea() {
+            if (!incidentLocation || !searchAreaPolygon) {
+                return true; // If no location or search area, don't check
+            }
+            
+            const incidentPoint = L.latLng(incidentLocation.latitude, incidentLocation.longitude);
+            const searchAreaBounds = searchAreaPolygon.getBounds();
+            
+            // First do a quick bounds check
+            if (!searchAreaBounds.contains(incidentPoint)) {
+                return false;
+            }
+            
+            // More precise point-in-polygon check using Leaflet's geometry
+            const searchAreaLatLngs = searchAreaPolygon.getLatLngs()[0];
+            
+            // Convert to simple coordinate arrays for point-in-polygon calculation
+            const polygon = searchAreaLatLngs.map(point => [point.lat, point.lng]);
+            const point = [incidentLocation.latitude, incidentLocation.longitude];
+            
+            return pointInPolygon(point, polygon);
+        }
+        
+        // Point-in-polygon algorithm (ray casting)
+        function pointInPolygon(point, polygon) {
+            const [x, y] = point;
+            let inside = false;
+            
+            for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+                const [xi, yi] = polygon[i];
+                const [xj, yj] = polygon[j];
+                
+                if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+                    inside = !inside;
+                }
+            }
+            
+            return inside;
+        }
+        
         // Fetch hospital data from server
         async function fetchHospitalData(lat, lng) {
             try {
@@ -626,6 +667,20 @@
                 return;
             }
             
+            // Create temporary polygon to check if incident location is inside
+            const tempPolygon = L.polygon(drawingPoints);
+            
+            // Check if incident location is within the search area
+            if (incidentLocation && !isIncidentLocationInSearchArea()) {
+                const confirmed = confirm('The search area does not include the incident location. Are you sure this is the search area you want to use?');
+                if (!confirmed) {
+                    // User said no, clear the search area
+                    clearDrawingState();
+                    showStatus('Search area cleared. Please redraw to include the incident location.', 'success');
+                    return;
+                }
+            }
+            
             // Clear the temporary drawing elements
             searchAreaLayer.clearLayers();
             
@@ -657,6 +712,20 @@
             document.getElementById('generateDivisionsBtn').disabled = false;
             
             showStatus('Search area saved successfully', 'success');
+        }
+        
+        // Clear drawing state without saving
+        function clearDrawingState() {
+            searchAreaLayer.clearLayers();
+            isDrawMode = false;
+            drawingPoints = [];
+            currentDrawingLine = null;
+            
+            // Reset button
+            const btn = document.getElementById('drawAreaBtn');
+            btn.innerHTML = '<i class="bi bi-bounding-box me-2"></i>Draw Search Area';
+            btn.classList.remove('btn-success');
+            btn.classList.add('btn-warning');
         }
         
         // Clear search area
