@@ -320,7 +320,7 @@ def unit_checkin_api():
         # Map old checkin fields to new status update format
         status_data = {
             'incident_id': data.get('incident_id'),
-            'status': 'staging',  # Check-in is staging status
+            'new_status': 'staging',  # Check-in is staging status
             'unit_name': data.get('unit_id'),  # Use unit_id as name if no name provided
             'unit_type': data.get('unit_type', 'Unknown'),
             'unit_leader': data.get('company_officer'),
