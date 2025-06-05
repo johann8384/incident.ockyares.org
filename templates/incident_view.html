@@ -235,11 +235,113 @@
         </div>
     </div>
 
+    <!-- Unit Status Update Modal -->
+    <div class="modal fade" id="unitStatusModal" tabindex="-1" aria-labelledby="unitStatusModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="unitStatusModalLabel">
+                        <i class="bi bi-pencil-square me-2"></i>Update Unit Status
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="unitStatusForm">
+                        <!-- Unit Info Display -->
+                        <div class="card bg-light mb-3">
+                            <div class="card-body py-2">
+                                <div class="row">
+                                    <div class="col-6">
+                                        <small class="text-muted">Unit ID</small>
+                                        <div class="fw-bold" id="statusUnitId">-</div>
+                                    </div>
+                                    <div class="col-6">
+                                        <small class="text-muted">Unit Name</small>
+                                        <div class="fw-bold" id="statusUnitName">-</div>
+                                    </div>
+                                </div>
+                                <div class="row mt-2">
+                                    <div class="col-6">
+                                        <small class="text-muted">Current Status</small>
+                                        <div class="fw-bold" id="statusCurrentStatus">-</div>
+                                    </div>
+                                    <div class="col-6">
+                                        <small class="text-muted">Current Division</small>
+                                        <div class="fw-bold" id="statusCurrentDivision">-</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Status Selection -->
+                        <div class="mb-3">
+                            <label for="newStatus" class="form-label">New Status</label>
+                            <select class="form-select" id="newStatus" required>
+                                <option value="">Select Status...</option>
+                            </select>
+                        </div>
+
+                        <!-- Division Selection (shown conditionally) -->
+                        <div class="mb-3" id="divisionGroup" style="display: none;">
+                            <label for="divisionSelect" class="form-label">Division</label>
+                            <select class="form-select" id="divisionSelect">
+                                <option value="">Select Division...</option>
+                            </select>
+                            <div class="form-text">Required for operating status</div>
+                        </div>
+
+                        <!-- Percentage Complete (shown conditionally) -->
+                        <div class="mb-3" id="percentGroup" style="display: none;">
+                            <label for="percentComplete" class="form-label">Percentage Complete</label>
+                            <div class="input-group">
+                                <input type="range" class="form-range" min="0" max="100" step="5" id="percentComplete" value="0">
+                                <span class="input-group-text" id="percentDisplay">0%</span>
+                            </div>
+                            <div class="form-text">Will automatically move to 'Operating' if > 0%</div>
+                        </div>
+
+                        <!-- Notes -->
+                        <div class="mb-3">
+                            <label for="statusNotes" class="form-label">Notes</label>
+                            <textarea class="form-control" id="statusNotes" rows="3" placeholder="Optional status update notes..."></textarea>
+                        </div>
+
+                        <!-- Location TODO: Add location capture -->
+                        <div class="alert alert-info">
+                            <i class="bi bi-info-circle me-2"></i>
+                            <small>Location capture will be added in a future update</small>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="submitUnitStatusUpdate()">
+                        <i class="bi bi-check-circle me-2"></i>Update Status
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Bootstrap 5.3 JS Bundle -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <!-- Custom JS -->
     <script src="{{ url_for('static', filename='js/incident-view.js') }}"></script>
+
+    <!-- Add percentage display update script -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const percentComplete = document.getElementById('percentComplete');
+            const percentDisplay = document.getElementById('percentDisplay');
+            
+            if (percentComplete && percentDisplay) {
+                percentComplete.addEventListener('input', function() {
+                    percentDisplay.textContent = this.value + '%';
+                });
+            }
+        });
+    </script>
 </body>
 </html>
