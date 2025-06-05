@@ -454,11 +454,11 @@
                                         ${unit.bsar_tech ? '<span class="badge bg-info">BSAR Tech</span>' : ''}
                                     </div>
                                     <p class="mb-1 text-muted">
-                                        <strong>Officer:</strong> ${unit.company_officer}<br>
-                                        <strong>Personnel:</strong> ${unit.number_of_personnel}
+                                        <strong>Officer:</strong> ${unit.unit_leader || 'Not specified'}<br>
+                                        <strong>Personnel:</strong> ${unit.number_of_personnel || 'Not specified'}
                                     </p>
                                     <small class="text-muted">
-                                        Checked in: ${new Date(unit.checked_in_at).toLocaleString()}
+                                        Checked in: ${unit.created_at ? new Date(unit.created_at).toLocaleString() : 'Unknown'}
                                     </small>
                                 </div>
                                 <div class="text-end">
@@ -493,10 +493,10 @@
                     
                     const popupContent = `
                         <b>Unit ${unit.unit_id}</b><br>
-                        <strong>Officer:</strong> ${unit.company_officer}<br>
-                        <strong>Personnel:</strong> ${unit.number_of_personnel}<br>
+                        <strong>Officer:</strong> ${unit.unit_leader || 'Not specified'}<br>
+                        <strong>Personnel:</strong> ${unit.number_of_personnel || 'Not specified'}<br>
                         <strong>BSAR Tech:</strong> ${unit.bsar_tech ? 'Yes' : 'No'}<br>
-                        <strong>Checked in:</strong> ${new Date(unit.checked_in_at).toLocaleString()}
+                        <strong>Checked in:</strong> ${unit.created_at ? new Date(unit.created_at).toLocaleString() : 'Unknown'}
                     `;
                     
                     unitMarker.bindPopup(popupContent);
