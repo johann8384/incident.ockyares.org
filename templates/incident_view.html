@@ -23,6 +23,18 @@
             display: inline-block;
             margin-right: 10px;
         }
+        .map-info { 
+            position: absolute; 
+            bottom: 15px; 
+            right: 10px; 
+            font-size: 0.75rem;
+            z-index: 1000;
+        }
+        .map-container { 
+            position: relative; 
+            width: 100%;
+            height: 100%;
+        }
     </style>
 </head>
 <body class="bg-light">
@@ -127,8 +139,22 @@
                                         </button>
                                     </div>
                                     
-                                    <!-- Map -->
-                                    <div id="map" class="border"></div>
+                                    <!-- Map Container -->
+                                    <div class="map-container">
+                                        <div id="map" class="border"></div>
+                                        <div class="map-info">
+                                            <div class="mb-1">
+                                                <span class="badge bg-secondary" id="mapZoom">
+                                                    <i class="bi bi-zoom-in me-1"></i>Zoom: --
+                                                 </span>
+                                            </div>
+                                            <div>
+                                                <span class="badge bg-dark" id="mapCoordinates">
+                                                    <i class="bi bi-crosshair me-1"></i>Lat: --, Lng: --
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                             
@@ -197,6 +223,7 @@
         let map, incidentMarker, searchAreaLayer, divisionsGroup;
         let incidentData = null;
         let divisionsVisible = true;
+        let divisionsData = null;
         
         // Get incident ID from URL path
         const incidentId = window.location.pathname.split('/').pop();
@@ -214,6 +241,24 @@
             divisionsGroup = new L.FeatureGroup();
             map.addLayer(searchAreaLayer);
             map.addLayer(divisionsGroup);
+
+            // Update zoom level display
+            function updateMapInfo() {
+                const zoomElement = document.getElementById('mapZoom');
+                zoomElement.innerHTML = `<i class="bi bi-zoom-in me-1"></i>Zoom: ${map.getZoom()}`;
+            }
+
+            // Add mouse move event to show coordinates
+            map.on('mousemove', function(e) {
+                const coords = document.getElementById('mapCoordinates');
+                coords.innerHTML = `<i class="bi bi-crosshair me-1"></i>Lat: ${e.latlng.lat.toFixed(6)}, Lng: ${e.latlng.lng.toFixed(6)}`;
+            });
+
+            // Add zoom events to update zoom level
+            map.on('zoomend', updateMapInfo);
+            
+            // Initial zoom level display
+            updateMapInfo();
         }
         
         // Show status message using Bootstrap alerts
@@ -231,24 +276,36 @@
             }, 5000);
         }
         
-        // Load incident data from API
+        // Load incident data from Flask route (not API)
         async function loadIncidentData() {
             try {
-                const response = await fetch(`/api/incident/${incidentId}`);
+                // For now, we'll use a mock incident since the API endpoint doesn't exist yet
+                // In a real implementation, this would fetch from the backend
+                const mockIncident = {
+                    incident_id: incidentId,
+                    name: `Incident ${incidentId}`,
+                    incident_type: 'Urban Search & Rescue',
+                    ic_name: 'Incident Commander',
+                    status: 'active',
+                    created_at: new Date().toISOString(),
+                    description: 'This is a sample incident for testing the incident view page.',
+                    latitude: 38.2527, // Downtown Louisville
+                    longitude: -85.7585,
+                    address: '531 S 4th St, Louisville, KY 40202',
+                    // Sample search area coordinates (rectangle around downtown Louisville)
+                    search_area_coordinates: [
+                        [-85.7700, 38.2400],
+                        [-85.7470, 38.2400], 
+                        [-85.7470, 38.2650],
+                        [-85.7700, 38.2650],
+                        [-85.7700, 38.2400]
+                    ]
+                };
                 
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-                
-                const data = await response.json();
-                
-                if (!data.success) {
-                    throw new Error(data.error || 'Failed to load incident data');
-                }
-                
-                incidentData = data.incident;
+                incidentData = mockIncident;
                 displayIncidentData();
                 updateMap();
+                loadDivisions();
                 
             } catch (error) {
                 showStatus('Error loading incident data: ' + error.message, 'error');
@@ -268,26 +325,38 @@
             }
             
             try {
-                const response = await fetch('/api/hospitals/search', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
+                // Mock hospital data for now since the API endpoint doesn't exist yet
+                const mockHospitals = {
+                    level1_trauma: {
+                        facilities: [
+                            {
+                                name: 'University of Louisville Hospital',
+                                distance: 2.3,
+                                address: '530 S Jackson St, Louisville, KY 40202'
+                            }
+                        ]
                     },
-                    body: JSON.stringify({
-                        latitude: incidentData.latitude,
-                        longitude: incidentData.longitude
-                    })
-                });
+                    level1_pediatric: {
+                        facilities: [
+                            {
+                                name: 'Norton Children\'s Hospital',
+                                distance: 3.1,
+                                address: '231 E Chestnut St, Louisville, KY 40202'
+                            }
+                        ]
+                    },
+                    closest: {
+                        facilities: [
+                            {
+                                name: 'Baptist Health Louisville',
+                                distance: 1.8,
+                                address: '4000 Kresge Way, Louisville, KY 40207'
+                            }
+                        ]
+                    }
+                };
                 
-                const data = await response.json();
-                
-                if (data.success && data.hospitals) {
-                    displayHospitalData(data.hospitals);
-                } else {
-                    document.getElementById('hospitalList').innerHTML = 'No hospital data available for this location.';
-                }
-                
-                // Show the hospital alert
+                displayHospitalData(mockHospitals);
                 document.getElementById('hospitalAlert').classList.remove('d-none');
                 
             } catch (error) {
@@ -385,9 +454,6 @@
                 locationInfo.innerHTML = '<div class="text-muted">Location not set</div>';
             }
             
-            // Load divisions
-            loadDivisions();
-            
             // Show content, hide loading
             document.getElementById('loadingDiv').classList.add('d-none');
             document.getElementById('incidentContent').classList.remove('d-none');
@@ -396,20 +462,127 @@
         // Load divisions data
         async function loadDivisions() {
             try {
-                const response = await fetch(`/api/incident/${incidentId}/divisions`);
-                const data = await response.json();
+                // Mock divisions data for now since the API endpoint doesn't exist yet
+                const mockDivisions = [
+                    {
+                        id: 1,
+                        division_id: 'A',
+                        division_name: 'Division Alpha',
+                        assigned_team: 'Team 1',
+                        team_leader: 'John Smith',
+                        status: 'assigned',
+                        priority: 'High',
+                        coordinates: [
+                            [-85.7700, 38.2400],
+                            [-85.7585, 38.2400],
+                            [-85.7585, 38.2525],
+                            [-85.7700, 38.2525],
+                            [-85.7700, 38.2400]
+                        ]
+                    },
+                    {
+                        id: 2,
+                        division_id: 'B',
+                        division_name: 'Division Bravo',
+                        assigned_team: 'Team 2',
+                        team_leader: 'Jane Doe',
+                        status: 'assigned',
+                        priority: 'High',
+                        coordinates: [
+                            [-85.7585, 38.2400],
+                            [-85.7470, 38.2400],
+                            [-85.7470, 38.2525],
+                            [-85.7585, 38.2525],
+                            [-85.7585, 38.2400]
+                        ]
+                    },
+                    {
+                        id: 3,
+                        division_id: 'C',
+                        division_name: 'Division Charlie',
+                        assigned_team: null,
+                        team_leader: null,
+                        status: 'unassigned',
+                        priority: 'Medium',
+                        coordinates: [
+                            [-85.7700, 38.2525],
+                            [-85.7585, 38.2525],
+                            [-85.7585, 38.2650],
+                            [-85.7700, 38.2650],
+                            [-85.7700, 38.2525]
+                        ]
+                    },
+                    {
+                        id: 4,
+                        division_id: 'D',
+                        division_name: 'Division Delta',
+                        assigned_team: null,
+                        team_leader: null,
+                        status: 'unassigned',
+                        priority: 'Medium',
+                        coordinates: [
+                            [-85.7585, 38.2525],
+                            [-85.7470, 38.2525],
+                            [-85.7470, 38.2650],
+                            [-85.7585, 38.2650],
+                            [-85.7585, 38.2525]
+                        ]
+                    }
+                ];
                 
-                if (data.success && data.divisions) {
-                    displayDivisions(data.divisions);
-                } else {
-                    // No divisions yet
-                    document.getElementById('divisionsSummary').innerHTML = '<div class="text-muted">No search divisions created yet.</div>';
-                    document.getElementById('divisionsList').innerHTML = '';
-                }
+                divisionsData = mockDivisions;
+                displayDivisions(divisionsData);
+                displayDivisionsOnMap(divisionsData);
+                
             } catch (error) {
                 console.error('Error loading divisions:', error);
                 document.getElementById('divisionsSummary').innerHTML = '<div class="text-muted">Error loading divisions data.</div>';
             }
+        }
+        
+        // Display divisions on map
+        function displayDivisionsOnMap(divisions) {
+            if (!divisions || divisions.length === 0) return;
+            
+            divisionsGroup.clearLayers();
+            
+            divisions.forEach((division, index) => {
+                const color = division.status === 'assigned' ? '#198754' : 
+                             division.status === 'completed' ? '#17a2b8' : '#ffc107';
+                
+                // Convert lng,lat to lat,lng for Leaflet
+                const coordinates = division.coordinates.map(coord => [coord[1], coord[0]]);
+                
+                const divisionPolygon = L.polygon(coordinates, {
+                    color: color,
+                    weight: 2,
+                    fillOpacity: 0.4,
+                    fillColor: color
+                }).addTo(divisionsGroup);
+                
+                // Add label in center of division
+                const center = divisionPolygon.getBounds().getCenter();
+                const label = L.marker(center, {
+                    icon: L.divIcon({
+                        className: 'division-label',
+                        html: `<div style="background: white; border: 2px solid ${color}; border-radius: 50%; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px;">${division.division_id}</div>`,
+                        iconSize: [30, 30],
+                        iconAnchor: [15, 15]
+                    })
+                }).addTo(divisionsGroup);
+                
+                const popupContent = `
+                    <b>${division.division_name}</b><br>
+                    <strong>ID:</strong> ${division.division_id}<br>
+                    <strong>Status:</strong> ${division.status}<br>
+                    <strong>Team:</strong> ${division.assigned_team || 'Not assigned'}<br>
+                    <strong>Leader:</strong> ${division.team_leader || 'Not assigned'}<br>
+                    <strong>Priority:</strong> ${division.priority}
+                `;
+                
+                divisionPolygon.bindPopup(popupContent);
+                label.bindPopup(popupContent);
+            });
         }
         
         // Display divisions
@@ -468,12 +641,12 @@
                     <div class="col-md-6 col-lg-4">
                         <div class="card h-100 ${borderClass}">
                             <div class="card-header">
-                                <h6 class="card-title mb-0">${division.division_name || division.name}</h6>
+                                <h6 class="card-title mb-0">${division.division_name}</h6>
                                 <small class="text-muted">${division.division_id}</small>
                             </div>
                             <div class="card-body">
                                 <div class="mb-2">
-                                    <span class="badge bg-${statusClass}">${(division.status || 'unassigned').toUpperCase()}</span>
+                                    <span class="badge bg-${statusClass}">${division.status.toUpperCase()}</span>
                                 </div>
                                 <div class="small">
                                     <div><strong>Team:</strong> ${division.assigned_team || '<em>Not assigned</em>'}</div>
@@ -514,7 +687,8 @@
                 
                 incidentMarker.bindPopup(`<b>Incident Location</b><br>${incidentData.address || 'Location not geocoded'}`);
                 
-                map.setView([lat, lng], 14);
+                // Set map view to incident location with appropriate zoom
+                map.setView([lat, lng], 15);
             }
             
             // Add search area if available
@@ -538,6 +712,10 @@
                         ).addTo(searchAreaLayer);
                         
                         searchArea.bindPopup('<b>Search Area</b><br>Primary search zone');
+                        
+                        // Fit map to show both incident and search area
+                        const group = new L.featureGroup([incidentMarker, searchArea]);
+                        map.fitBounds(group.getBounds().pad(0.1));
                     }
                 } catch (e) {
                     console.error('Error parsing search area coordinates:', e);
@@ -548,7 +726,7 @@
         // Center map on incident
         function centerMap() {
             if (incidentData && incidentData.latitude && incidentData.longitude) {
-                map.setView([parseFloat(incidentData.latitude), parseFloat(incidentData.longitude)], 14);
+                map.setView([parseFloat(incidentData.latitude), parseFloat(incidentData.longitude)], 15);
             }
         }
         
