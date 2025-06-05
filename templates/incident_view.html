@@ -368,12 +368,14 @@
                 }
                 
                 incidentData = data.incident;
+                console.log('Incident data loaded:', incidentData); // Debug
                 displayIncidentData();
                 updateMap();
                 loadUnits(); // Load units after incident data
                 loadDivisions(); // Load divisions after incident data
                 
             } catch (error) {
+                console.error('Error loading incident data:', error); // Debug
                 showStatus('Error loading incident data: ' + error.message, 'error');
                 document.getElementById('loadingDiv').innerHTML = `
                     <div class="alert alert-danger">
@@ -650,15 +652,20 @@
         // Load divisions data
         async function loadDivisions() {
             try {
+                console.log('Loading divisions for incident:', incidentId); // Debug
                 const response = await fetch(`/api/incident/${incidentId}/divisions`);
-                const data = await response.json();
+                console.log('Divisions response status:', response.status); // Debug
                 
-                if (data.success && data.divisions) {
+                const data = await response.json();
+                console.log('Divisions data:', data); // Debug
+                
+                if (data.success && data.divisions && data.divisions.length > 0) {
                     divisionsData = data.divisions;
+                    console.log('Divisions loaded:', divisionsData.length, 'divisions'); // Debug
                     displayDivisions(data.divisions);
                     displayDivisionsOnMap(data.divisions);
                 } else {
-                    // No divisions yet
+                    console.log('No divisions found'); // Debug
                     document.getElementById('divisionsSummary').innerHTML = '<div class="text-muted">No search divisions created yet.</div>';
                     document.getElementById('divisionsList').innerHTML = '';
                 }
@@ -670,11 +677,14 @@
         
         // Display divisions on map
         function displayDivisionsOnMap(divisions) {
+            console.log('Displaying divisions on map:', divisions.length); // Debug
             if (!divisions || divisions.length === 0) return;
             
             divisionsGroup.clearLayers();
             
             divisions.forEach((division, index) => {
+                console.log('Processing division:', division.division_id, division); // Debug
+                
                 const color = division.status === 'assigned' ? '#198754' : 
                              division.status === 'completed' ? '#17a2b8' : '#ffc107';
                 
@@ -682,12 +692,13 @@
                 
                 // Parse coordinates from different possible formats
                 if (division.coordinates) {
-                    // Convert lng,lat to lat,lng for Leaflet
+                    console.log('Using division.coordinates'); // Debug
                     coordinates = division.coordinates.map(coord => [coord[1], coord[0]]);
                 } else if (division.area_coordinates) {
-                    // Handle area_coordinates field
+                    console.log('Using division.area_coordinates'); // Debug
                     coordinates = division.area_coordinates.map(coord => [coord[1], coord[0]]);
                 } else if (division.geom) {
+                    console.log('Using division.geom'); // Debug
                     try {
                         const geom = typeof division.geom === 'string' ? JSON.parse(division.geom) : division.geom;
                         if (geom.coordinates && geom.coordinates[0]) {
@@ -698,7 +709,9 @@
                     }
                 }
                 
-                if (coordinates) {
+                console.log('Division coordinates:', coordinates); // Debug
+                
+                if (coordinates && coordinates.length > 0) {
                     const divisionPolygon = L.polygon(coordinates, {
                         color: color,
                         weight: 2,
@@ -728,8 +741,14 @@
                     
                     divisionPolygon.bindPopup(popupContent);
                     label.bindPopup(popupContent);
+                    
+                    console.log('Added division polygon to map'); // Debug
+                } else {
+                    console.log('No valid coordinates for division:', division.division_id); // Debug
                 }
             });
+            
+            console.log('Total features in divisionsGroup:', divisionsGroup.getLayers().length); // Debug
         }
         
         // Display divisions
@@ -887,10 +906,14 @@
             const toggle = document.getElementById('divisionsToggle');
             divisionsVisible = toggle.checked;
             
+            console.log('Toggle divisions:', divisionsVisible, 'Divisions group layers:', divisionsGroup.getLayers().length); // Debug
+            
             if (divisionsVisible) {
                 map.addLayer(divisionsGroup);
+                console.log('Added divisions layer to map'); // Debug
             } else {
                 map.removeLayer(divisionsGroup);
+                console.log('Removed divisions layer from map'); // Debug
             }
         }
         
