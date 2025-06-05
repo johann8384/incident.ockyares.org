@@ -1,4 +1,4 @@
-#!/bin/bash -x
+#!/bin/bash
 
 # Database Migration Script
 # Runs SQL migration files against the database using Docker Compose

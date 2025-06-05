@@ -123,14 +123,69 @@ class Incident:
             area_m2 = self._calculate_area_m2(polygon)
             num_divisions = max(1, int(area_m2 / area_size_m2))
 
-            # Generate divisions
-            divisions = self._create_grid_divisions_preview(polygon, num_divisions)
+            # Generate divisions with priority calculation
+            divisions = self._create_grid_divisions_preview(
+                polygon, num_divisions, self.incident_location
+            )
 
             return divisions
 
         except Exception as e:
             print(f"Failed to generate divisions preview: {e}")
             raise e
+
+    def _calculate_division_priority(
+        self, division_geom: Polygon, incident_location: Point, existing_divisions: List[Dict]
+    ) -> str:
+        """
+        Calculate division priority based on distance from incident location
+        Priority rules:
+        - High: Division containing incident location + adjacent divisions
+        - Medium: Divisions adjacent to High priority divisions  
+        - Low: All other divisions
+        """
+        if not incident_location:
+            return "Low"
+        
+        # Check if this division contains the incident location
+        if division_geom.contains(incident_location):
+            return "High"
+        
+        # Find High priority divisions already created
+        high_priority_divisions = [
+            div for div in existing_divisions if div.get("priority") == "High"
+        ]
+        
+        # If no High priority division exists yet, check distance to incident
+        if not high_priority_divisions:
+            # Calculate distance from division centroid to incident location
+            division_centroid = division_geom.centroid
+            distance = division_centroid.distance(incident_location)
+            
+            # If very close to incident (roughly adjacent), make it High
+            # Using a small threshold based on typical division size
+            bounds = division_geom.bounds
+            division_size = max(bounds[2] - bounds[0], bounds[3] - bounds[1])
+            
+            if distance <= division_size * 1.5:  # Within 1.5 division widths
+                return "High"
+        else:
+            # Check if adjacent to any High priority division
+            for high_div in high_priority_divisions:
+                if "coordinates" in high_div:
+                    high_geom = Polygon(high_div["coordinates"])
+                    # Check if divisions are adjacent (touching or very close)
+                    if division_geom.touches(high_geom) or division_geom.distance(high_geom) < 0.001:
+                        return "High"
+        
+        # Check if adjacent to any High priority division for Medium priority
+        for existing_div in existing_divisions:
+            if existing_div.get("priority") == "High" and "coordinates" in existing_div:
+                existing_geom = Polygon(existing_div["coordinates"])
+                if division_geom.touches(existing_geom) or division_geom.distance(existing_geom) < 0.001:
+                    return "Medium"
+        
+        return "Low"
 
     def save_divisions(self, divisions: List[Dict]) -> bool:
         """Save divisions to database"""
@@ -177,7 +232,7 @@ class Incident:
                         polygon_wkt,
                         division.get("estimated_area_m2", 0),
                         division.get("status", "unassigned"),
-                        division.get("priority", 1),
+                        division.get("priority", "Low"),
                         division.get("search_type", "primary"),
                         division.get("estimated_duration", "2 hours"),
                         division.get("assigned_team"),
@@ -308,11 +363,11 @@ class Incident:
             SELECT 
                 id, division_name, division_id, estimated_area_m2,
                 assigned_team, team_leader, priority, search_type,
-                estimated_duration, status,
+                estimated_duration, status, assigned_unit_id,
                 ST_AsGeoJSON(area_geometry) as geometry_geojson
             FROM search_divisions
             WHERE incident_id = %s
-            ORDER BY division_name
+            ORDER BY priority DESC, division_name
             """
 
             result = self.db.execute_query(query, (self.incident_id,), fetch=True)
@@ -398,7 +453,7 @@ class Incident:
         return abs(area_m2)
 
     def _create_grid_divisions_preview(
-        self, polygon: Polygon, num_divisions: int
+        self, polygon: Polygon, num_divisions: int, incident_location: Point = None
     ) -> List[Dict]:
         """Create grid-based divisions for preview"""
         divisions = []
@@ -471,6 +526,11 @@ class Incident:
                             division_name = f"Division {division_letter}"
                             division_id = f"DIV-{division_letter}"
 
+                            # Calculate priority based on distance from incident location
+                            priority = self._calculate_division_priority(
+                                clipped, incident_location, divisions
+                            )
+
                             divisions.append(
                                 {
                                     "division_name": division_name,
@@ -480,7 +540,7 @@ class Incident:
                                         clipped
                                     ),
                                     "status": "unassigned",
-                                    "priority": 1,
+                                    "priority": priority,
                                     "search_type": "primary",
                                     "estimated_duration": "2 hours",
                                 }
@@ -529,6 +589,11 @@ class Incident:
                     division_name = f"Division {division_letter}"
                     division_id = f"DIV-{division_letter}"
 
+                    # Calculate priority based on incident location
+                    priority = self._calculate_division_priority(
+                        clipped, self.incident_location, divisions
+                    )
+
                     divisions.append(
                         {
                             "name": division_name,
@@ -536,7 +601,7 @@ class Incident:
                             "geometry": clipped,
                             "area_m2": self._calculate_area_m2(clipped),
                             "status": "unassigned",
-                            "priority": 1,
+                            "priority": priority,
                             "search_type": "primary",
                             "estimated_duration": "2 hours",
                         }
@@ -569,7 +634,7 @@ class Incident:
                     polygon_wkt,
                     division.get("area_m2", division.get("estimated_area_m2", 0)),
                     division.get("status", "unassigned"),
-                    division.get("priority", 1),
+                    division.get("priority", "Low"),
                     division.get("search_type", "primary"),
                     division.get("estimated_duration", "2 hours"),
                 )
