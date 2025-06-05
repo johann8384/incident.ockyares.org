@@ -370,10 +370,10 @@ def assign_unit_to_division(incident_id, division_id):
         with db_manager.get_connection() as conn:
             cursor = conn.cursor()
             
-            # Update the search_divisions table
+            # Update the search_divisions table with unit assignment and status change
             cursor.execute("""
                 UPDATE search_divisions 
-                SET assigned_unit_id = %s
+                SET assigned_unit_id = %s, status = 'assigned'
                 WHERE incident_id = %s AND division_id = %s
             """, (unit_id, incident_id, division_id))
             
