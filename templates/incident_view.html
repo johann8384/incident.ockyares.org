@@ -1,17 +1,32 @@
-        // Initialize page
-        document.addEventListener('DOMContentLoaded', function() {
-            initMap();
-            loadIncidentData();
-            
-            // Event listeners
-            document.getElementById('centerMapBtn').addEventListener('click', centerMap);
-            document.getElementById('refreshBtn').addEventListener('click', refreshData);
-            document.getElementById('showHospitalsBtn').addEventListener('click', loadHospitalData);
-            document.getElementById('divisionsToggle').addEventListener('change', toggleDivisions);
-            
-            // Auto-refresh units every 30 seconds
-            setInterval(loadUnits, 30000);
-            
-            // Auto-refresh available units for assignment dropdowns every 15 seconds
-            setInterval(loadAvailableUnits, 15000);
-        });
+        // Load available units for assignment dropdowns
+        async function loadAvailableUnits() {
+            try {
+                const response = await fetch(`/api/incident/${incidentId}/available-units`);
+                const data = await response.json();
+                
+                if (data.success && data.units) {
+                    // Update all unit dropdowns
+                    document.querySelectorAll('[id^="unit-select-"]').forEach(select => {
+                        const currentValue = select.value;
+                        
+                        // Clear existing options except first one
+                        select.innerHTML = '<option value="">Select Unit...</option>';
+                        
+                        // Add available units (staging status or unassigned)
+                        data.units.forEach(unit => {
+                            const option = document.createElement('option');
+                            option.value = unit.unit_id;
+                            option.textContent = `${unit.unit_id} - ${unit.unit_name || unit.unit_type} (${unit.current_status})`;
+                            select.appendChild(option);
+                        });
+                        
+                        // Restore previous selection if still valid
+                        if (currentValue) {
+                            select.value = currentValue;
+                        }
+                    });
+                }
+            } catch (error) {
+                console.error('Error loading available units:', error);
+            }
+        }
