@@ -38,6 +38,12 @@ def unit_checkin(incident_id):
     return render_template("unit_checkin.html", incident_id=incident_id)
 
 
+@app.route("/incident/<incident_id>/unit-status")
+def unit_status_page(incident_id):
+    """Unit status update page"""
+    return render_template("unit_status.html", incident_id=incident_id)
+
+
 @app.route("/api/geocode/reverse", methods=["POST"])
 def reverse_geocode():
     """Reverse geocode coordinates to address using GeocodingService"""
@@ -231,6 +237,129 @@ def unit_checkin_api():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# NEW UNIT STATUS ENDPOINTS
+
+@app.route("/api/unit/create", methods=["POST"])
+def create_unit():
+    """Create a new unit"""
+    try:
+        data = request.get_json()
+        
+        required_fields = ['unit_id', 'unit_name', 'unit_type', 'unit_leader']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({"error": f"{field} is required"}), 400
+        
+        unit = Unit(
+            unit_id=data['unit_id'],
+            unit_name=data['unit_name'], 
+            unit_type=data['unit_type'],
+            unit_leader=data['unit_leader']
+        )
+        
+        unit_db_id = unit.create_unit(data.get('contact_info'))
+        
+        return jsonify({
+            "success": True,
+            "unit_id": data['unit_id'],
+            "db_id": unit_db_id,
+            "message": "Unit created successfully"
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/unit/<unit_id>/status", methods=["POST"])
+def update_unit_status_new(unit_id):
+    """Update unit status with location and notes"""
+    try:
+        data = request.get_json()
+        
+        required_fields = ['incident_id', 'status']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({"error": f"{field} is required"}), 400
+        
+        unit = Unit(unit_id=unit_id)
+        
+        unit.update_status(
+            incident_id=data['incident_id'],
+            new_status=data['status'],
+            division_id=data.get('division_id'),
+            percentage_complete=data.get('percentage_complete', 0),
+            latitude=data.get('latitude'),
+            longitude=data.get('longitude'),
+            notes=data.get('notes'),
+            user_name=data.get('user_name')
+        )
+        
+        return jsonify({
+            "success": True,
+            "message": f"Unit {unit_id} status updated to {data['status']}"
+        })
+        
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/incident/<incident_id>/assign-division", methods=["POST"])
+def assign_division_to_unit(incident_id):
+    """Assign a division to a unit"""
+    try:
+        data = request.get_json()
+        
+        if not data.get('unit_id') or not data.get('division_id'):
+            return jsonify({"error": "unit_id and division_id are required"}), 400
+        
+        unit = Unit(unit_id=data['unit_id'])
+        unit.assign_to_division(incident_id, data['division_id'])
+        
+        return jsonify({
+            "success": True,
+            "message": f"Unit {data['unit_id']} assigned to division {data['division_id']}"
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/incident/<incident_id>/units", methods=["GET"])
+def get_incident_units_new(incident_id):
+    """Get all units for an incident"""
+    try:
+        units = Unit.get_units_by_incident(incident_id)
+        return jsonify({
+            "success": True,
+            "units": units,
+            "count": len(units)
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/unit/<unit_id>/history", methods=["GET"])
+def get_unit_history(unit_id):
+    """Get status history for a unit"""
+    try:
+        incident_id = request.args.get('incident_id')
+        history = Unit.get_unit_status_history(unit_id, incident_id)
+        
+        return jsonify({
+            "success": True,
+            "history": history,
+            "count": len(history)
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# EXISTING ENDPOINTS (keeping original structure)
 
 @app.route("/api/incident/<incident_id>/units", methods=["GET"])
 def get_incident_units(incident_id):
