@@ -11,9 +11,6 @@ GRANT ALL PRIVILEGES ON DATABASE emergency_ops TO postgres;
 -- GRANT USAGE ON SCHEMA public TO incident_app;
 -- GRANT CREATE ON SCHEMA public TO incident_app;
 
--- Create main incident management tables
-CREATE SCHEMA IF NOT EXISTS public;
-
 -- Create updated_at trigger function
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
