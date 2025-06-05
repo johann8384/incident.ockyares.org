@@ -1,0 +1,108 @@
+        // Display divisions
+        function displayDivisions(divisions) {
+            if (!divisions || divisions.length === 0) {
+                document.getElementById('divisionsSummary').innerHTML = '<div class="text-muted">No search divisions created yet.</div>';
+                document.getElementById('divisionsList').innerHTML = '';
+                return;
+            }
+            
+            // Update divisions summary
+            const summary = document.getElementById('divisionsSummary');
+            const totalDivisions = divisions.length;
+            const assignedDivisions = divisions.filter(d => d.status === 'assigned').length;
+            const completedDivisions = divisions.filter(d => d.status === 'completed').length;
+            const unassignedDivisions = totalDivisions - assignedDivisions - completedDivisions;
+            
+            summary.innerHTML = `
+                <div class="row g-2">
+                    <div class="col-sm-3">
+                        <div class="text-center">
+                            <div class="fs-4 fw-bold text-primary">${totalDivisions}</div>
+                            <small class="text-muted">Total</small>
+                        </div>
+                    </div>
+                    <div class="col-sm-3">
+                        <div class="text-center">
+                            <div class="fs-4 fw-bold text-success">${assignedDivisions}</div>
+                            <small class="text-muted">Assigned</small>
+                        </div>
+                    </div>
+                    <div class="col-sm-3">
+                        <div class="text-center">
+                            <div class="fs-4 fw-bold text-info">${completedDivisions}</div>
+                            <small class="text-muted">Completed</small>
+                        </div>
+                    </div>
+                    <div class="col-sm-3">
+                        <div class="text-center">
+                            <div class="fs-4 fw-bold text-warning">${unassignedDivisions}</div>
+                            <small class="text-muted">Unassigned</small>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Display division cards with assignment controls
+            const divisionsList = document.getElementById('divisionsList');
+            divisionsList.innerHTML = divisions.map(division => {
+                const statusClass = division.status === 'assigned' ? 'success' : 
+                                   division.status === 'completed' ? 'info' : 'warning';
+                const borderClass = division.status === 'assigned' ? 'border-success' : 
+                                   division.status === 'completed' ? 'border-info' : 'border-warning';
+                
+                const priorityClass = division.priority === 'High' ? 'danger' :
+                                     division.priority === 'Medium' ? 'warning' : 'secondary';
+                
+                return `
+                    <div class="col-md-6 col-lg-4">
+                        <div class="card h-100 ${borderClass}">
+                            <div class="card-header">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <h6 class="card-title mb-0">${division.division_name || division.name}</h6>
+                                        <small class="text-muted">${division.division_id}</small>
+                                    </div>
+                                    <span class="badge bg-${priorityClass}">${division.priority || 'Low'}</span>
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <div class="mb-2">
+                                    <span class="badge bg-${statusClass}">${(division.status || 'unassigned').toUpperCase()}</span>
+                                </div>
+                                
+                                <!-- Unit Assignment -->
+                                <div class="mb-3">
+                                    <label class="form-label small">Assigned Unit:</label>
+                                    <select class="form-select form-select-sm" 
+                                            id="unit-select-${division.division_id}" 
+                                            onchange="assignUnitToDivision('${division.division_id}', this.value)">
+                                        <option value="">Select Unit...</option>
+                                    </select>
+                                </div>
+                                
+                                <!-- Priority Selection -->
+                                <div class="mb-3">
+                                    <label class="form-label small">Priority:</label>
+                                    <select class="form-select form-select-sm" 
+                                            id="priority-select-${division.division_id}"
+                                            onchange="updateDivisionPriority('${division.division_id}', this.value)">
+                                        <option value="High" ${division.priority === 'High' ? 'selected' : ''}>High</option>
+                                        <option value="Medium" ${division.priority === 'Medium' ? 'selected' : ''}>Medium</option>
+                                        <option value="Low" ${division.priority === 'Low' ? 'selected' : ''}>Low</option>
+                                    </select>
+                                </div>
+                                
+                                <div class="small">
+                                    <div><strong>Team:</strong> ${division.assigned_team || '<em>Not assigned</em>'}</div>
+                                    ${division.team_leader ? `<div><strong>Leader:</strong> ${division.team_leader}</div>` : ''}
+                                    ${division.assigned_unit_id ? `<div><strong>Unit:</strong> ${division.assigned_unit_id}</div>` : ''}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            
+            // Load available units for dropdowns
+            loadAvailableUnits();
+        }
