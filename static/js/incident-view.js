@@ -15,6 +15,19 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('checkinFirstUnitBtn').href = unitCheckinUrl;
 });
 
+// Helper function to get status badge class
+function getStatusBadgeClass(status) {
+    switch (status) {
+        case 'staging': return 'secondary';
+        case 'assigned': return 'primary';
+        case 'operating': return 'success';
+        case 'recovering': return 'warning';
+        case 'out of service': return 'danger';
+        case 'quarters': return 'dark';
+        default: return 'secondary';
+    }
+}
+
 // Initialize map
 function initMap() {
     map = L.map('map').setView([38.3960874, -85.4425145], 13); // Default to Louisville, KY
@@ -177,13 +190,21 @@ function displayUnits(units) {
                             </div>
                             <p class="mb-1 text-muted">
                                 <strong>Officer:</strong> ${unit.unit_leader || 'Not specified'}<br>
-                                <strong>Personnel:</strong> ${unit.number_of_personnel || 'Not specified'}
+                                <strong>Personnel:</strong> ${unit.number_of_personnel || 'Not specified'}<br>
+                                ${unit.current_division_id ? `<strong>Division:</strong> ${unit.current_division_id}` : ''}
                             </p>
                             <small class="text-muted">
                                 Checked in: ${unit.created_at ? new Date(unit.created_at).toLocaleString() : 'Unknown'}
                             </small>
                         </div>
                         <div class="text-end">
+                            <button class="btn btn-sm btn-outline-primary me-1" 
+                                    onclick="openUnitStatusModal('${unit.unit_id}')" 
+                                    title="Update Status">
+                                <i class="bi bi-pencil-square"></i>
+                            </button>
+                            <span class="badge bg-${getStatusBadgeClass(unit.current_status)}">${unit.current_status || 'staging'}</span>
+                            <br>
                             <i class="bi bi-geo-alt-fill unit-status-online" title="Location available"></i>
                         </div>
                     </div>
@@ -191,6 +212,210 @@ function displayUnits(units) {
             `).join('')}
         </div>
     `;
+}
+
+// Open unit status update modal
+async function openUnitStatusModal(unitId) {
+    try {
+        // Get current unit data
+        const unit = unitsData.find(u => u.unit_id === unitId);
+        if (!unit) {
+            showStatus('Unit not found', 'error');
+            return;
+        }
+
+        // Populate modal with current unit info
+        document.getElementById('statusUnitId').textContent = unit.unit_id;
+        document.getElementById('statusUnitName').textContent = unit.unit_name || unit.unit_id;
+        document.getElementById('statusCurrentStatus').textContent = unit.current_status || 'staging';
+        document.getElementById('statusCurrentDivision').textContent = unit.current_division_id || 'None';
+        
+        // Set current values
+        document.getElementById('newStatus').value = unit.current_status || 'staging';
+        document.getElementById('percentComplete').value = 0;
+        document.getElementById('statusNotes').value = '';
+        
+        // Load available status options based on current status
+        updateStatusOptions(unit.current_status || 'staging');
+        
+        // Load divisions for dropdown
+        await loadDivisionsForStatusModal();
+        
+        // Set current division if assigned
+        if (unit.current_division_id) {
+            document.getElementById('divisionSelect').value = unit.current_division_id;
+        }
+        
+        // Show modal
+        const modal = new bootstrap.Modal(document.getElementById('unitStatusModal'));
+        modal.show();
+        
+        // Store unit ID for form submission
+        document.getElementById('unitStatusForm').dataset.unitId = unitId;
+        
+    } catch (error) {
+        console.error('Error opening status modal:', error);
+        showStatus('Error opening status modal', 'error');
+    }
+}
+
+// Update status options based on current status
+function updateStatusOptions(currentStatus) {
+    const statusSelect = document.getElementById('newStatus');
+    const divisionGroup = document.getElementById('divisionGroup');
+    const percentGroup = document.getElementById('percentGroup');
+    
+    // Clear existing options
+    statusSelect.innerHTML = '';
+    
+    let options = [];
+    
+    switch (currentStatus) {
+        case 'assigned':
+            options = [
+                { value: 'assigned', text: 'Assigned', selected: true },
+                { value: 'operating', text: 'Operating' },
+                { value: 'recovering', text: 'Recovering' },
+                { value: 'out of service', text: 'Out of Service' }
+            ];
+            divisionGroup.style.display = 'block';
+            percentGroup.style.display = 'block';
+            break;
+            
+        case 'operating':
+            options = [
+                { value: 'operating', text: 'Operating', selected: true },
+                { value: 'recovering', text: 'Recovering' },
+                { value: 'out of service', text: 'Out of Service' }
+            ];
+            divisionGroup.style.display = 'block';
+            percentGroup.style.display = 'block';
+            break;
+            
+        case 'recovering':
+            options = [
+                { value: 'recovering', text: 'Recovering', selected: true },
+                { value: 'operating', text: 'Operating' },
+                { value: 'staging', text: 'Staging' },
+                { value: 'out of service', text: 'Out of Service' }
+            ];
+            divisionGroup.style.display = 'block';
+            percentGroup.style.display = 'none';
+            break;
+            
+        case 'out of service':
+            options = [
+                { value: 'out of service', text: 'Out of Service', selected: true },
+                { value: 'staging', text: 'Staging' },
+                { value: 'quarters', text: 'Quarters' }
+            ];
+            divisionGroup.style.display = 'none';
+            percentGroup.style.display = 'none';
+            break;
+            
+        case 'staging':
+        default:
+            options = [
+                { value: 'staging', text: 'Staging', selected: true },
+                { value: 'out of service', text: 'Out of Service' },
+                { value: 'quarters', text: 'Quarters' }
+            ];
+            divisionGroup.style.display = 'none';
+            percentGroup.style.display = 'none';
+            break;
+    }
+    
+    // Add options to select
+    options.forEach(option => {
+        const optionElement = document.createElement('option');
+        optionElement.value = option.value;
+        optionElement.textContent = option.text;
+        if (option.selected) optionElement.selected = true;
+        statusSelect.appendChild(optionElement);
+    });
+    
+    // Update form visibility when status changes
+    statusSelect.addEventListener('change', function() {
+        const selectedStatus = this.value;
+        if (['assigned', 'operating'].includes(selectedStatus)) {
+            divisionGroup.style.display = 'block';
+            percentGroup.style.display = 'block';
+        } else if (selectedStatus === 'recovering') {
+            divisionGroup.style.display = 'block';
+            percentGroup.style.display = 'none';
+        } else {
+            divisionGroup.style.display = 'none';
+            percentGroup.style.display = 'none';
+        }
+    });
+}
+
+// Load divisions for status modal
+async function loadDivisionsForStatusModal() {
+    try {
+        const response = await fetch(`/api/incident/${incidentId}/divisions`);
+        const data = await response.json();
+        
+        const divisionSelect = document.getElementById('divisionSelect');
+        divisionSelect.innerHTML = '<option value="">Select Division...</option>';
+        
+        if (data.success && data.divisions) {
+            data.divisions.forEach(division => {
+                const option = document.createElement('option');
+                option.value = division.division_id;
+                option.textContent = `${division.division_name} (${division.status || 'unassigned'})`;
+                divisionSelect.appendChild(option);
+            });
+        }
+    } catch (error) {
+        console.error('Error loading divisions for status modal:', error);
+    }
+}
+
+// Submit unit status update
+async function submitUnitStatusUpdate() {
+    try {
+        const form = document.getElementById('unitStatusForm');
+        const unitId = form.dataset.unitId;
+        
+        const formData = {
+            incident_id: incidentId,
+            status: document.getElementById('newStatus').value,
+            division_id: document.getElementById('divisionSelect').value || null,
+            percentage_complete: parseInt(document.getElementById('percentComplete').value) || 0,
+            notes: document.getElementById('statusNotes').value || null,
+            latitude: null, // TODO: Add location capture
+            longitude: null
+        };
+        
+        const response = await fetch(`/api/unit/${unitId}/status`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(formData)
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showStatus(`Unit ${unitId} status updated successfully`, 'success');
+            
+            // Close modal
+            const modal = bootstrap.Modal.getInstance(document.getElementById('unitStatusModal'));
+            modal.hide();
+            
+            // Refresh data
+            loadUnits();
+            loadDivisions();
+        } else {
+            showStatus(`Error updating status: ${data.error}`, 'error');
+        }
+        
+    } catch (error) {
+        console.error('Error submitting status update:', error);
+        showStatus('Error submitting status update', 'error');
+    }
 }
 
 // Display units on map
@@ -218,6 +443,7 @@ function displayUnitsOnMap(units) {
                 <strong>Officer:</strong> ${unit.unit_leader || 'Not specified'}<br>
                 <strong>Personnel:</strong> ${unit.number_of_personnel || 'Not specified'}<br>
                 <strong>BSAR Tech:</strong> ${unit.bsar_tech ? 'Yes' : 'No'}<br>
+                <strong>Status:</strong> ${unit.current_status || 'staging'}<br>
                 <strong>Checked in:</strong> ${unit.created_at ? new Date(unit.created_at).toLocaleString() : 'Unknown'}
             `;
             
