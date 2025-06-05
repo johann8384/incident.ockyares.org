@@ -33,6 +33,12 @@ class DatabaseManager:
             self.conn.close()
             self.conn = None
 
+    def get_connection(self):
+        """Get database connection (creates if not exists)"""
+        if not self.conn or self.conn.closed:
+            return self.connect()
+        return self.conn
+
     def execute_query(self, query: str, params: tuple = None, fetch: bool = False):
         """Execute a query with optional parameters"""
         cursor = None
