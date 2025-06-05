@@ -198,96 +198,29 @@ def generate_divisions_preview():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/unit/checkin", methods=["POST"])
-def unit_checkin_api():
-    """Check in a unit to an incident using Unit model"""
-    try:
-        data = request.get_json()
-
-        # Check if incident exists first
-        incident = Incident.get_incident_by_id(data.get("incident_id"), db_manager)
-        if not incident:
-            return jsonify({"error": "Incident not found"}), 404
-
-        # Use Unit model for check-in process
-        unit = Unit(db_manager)
-        result = unit.checkin_to_incident(data)
-
-        if result["success"]:
-            return jsonify(
-                {
-                    "success": True,
-                    "unit_id": result["unit_id"],
-                    "message": result["message"],
-                }
-            )
-        else:
-            # Determine appropriate HTTP status code
-            if "not found" in result["error"].lower():
-                status_code = 404
-            elif "already checked in" in result["error"].lower():
-                status_code = 400
-            elif "required" in result["error"].lower():
-                status_code = 400
-            else:
-                status_code = 500
-
-            return jsonify({"error": result["error"]}), status_code
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-# NEW UNIT STATUS ENDPOINTS
-
-@app.route("/api/unit/create", methods=["POST"])
-def create_unit():
-    """Create a new unit"""
-    try:
-        data = request.get_json()
-        
-        required_fields = ['unit_id', 'unit_name', 'unit_type', 'unit_leader']
-        for field in required_fields:
-            if not data.get(field):
-                return jsonify({"error": f"{field} is required"}), 400
-        
-        unit = Unit()
-        unit.unit_id = data['unit_id']
-        
-        unit_db_id = unit.create_unit_record(
-            unit_id=data['unit_id'],
-            unit_name=data['unit_name'], 
-            unit_type=data['unit_type'],
-            unit_leader=data['unit_leader'],
-            contact_info=data.get('contact_info')
-        )
-        
-        return jsonify({
-            "success": True,
-            "unit_id": data['unit_id'],
-            "db_id": unit_db_id,
-            "message": "Unit created successfully"
-        })
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
+# UNIFIED UNIT STATUS ENDPOINTS
 
 @app.route("/api/unit/<unit_id>/status", methods=["POST"])
-def update_unit_status_new(unit_id):
-    """Update unit status with location and notes"""
+def update_unit_status_unified(unit_id):
+    """
+    Unified status update endpoint for both check-ins and status changes
+    Check-in is just a status update to 'staging' with unit details
+    """
     try:
         data = request.get_json()
         
+        # Validate required fields
         required_fields = ['incident_id', 'status']
         for field in required_fields:
             if not data.get(field):
                 return jsonify({"error": f"{field} is required"}), 400
         
+        # Create unit instance
         unit = Unit()
         unit.unit_id = unit_id
         
-        unit.update_enhanced_status(
+        # Call unified status update method
+        result = unit.update_status(
             incident_id=data['incident_id'],
             new_status=data['status'],
             division_id=data.get('division_id'),
@@ -295,16 +228,21 @@ def update_unit_status_new(unit_id):
             latitude=data.get('latitude'),
             longitude=data.get('longitude'),
             notes=data.get('notes'),
-            user_name=data.get('user_name')
+            user_name=data.get('user_name'),
+            # Check-in specific fields (required for staging status)
+            unit_name=data.get('unit_name'),
+            unit_type=data.get('unit_type'),
+            unit_leader=data.get('unit_leader'),
+            contact_info=data.get('contact_info'),
+            number_of_personnel=data.get('number_of_personnel'),
+            bsar_tech=data.get('bsar_tech', False)
         )
         
-        return jsonify({
-            "success": True,
-            "message": f"Unit {unit_id} status updated to {data['status']}"
-        })
+        if result["success"]:
+            return jsonify(result)
+        else:
+            return jsonify({"error": result["error"]}), 400
         
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -320,19 +258,19 @@ def assign_division_to_unit(incident_id):
         
         unit = Unit()
         unit.unit_id = data['unit_id']
-        unit.assign_to_division(incident_id, data['division_id'])
+        result = unit.assign_to_division(incident_id, data['division_id'])
         
-        return jsonify({
-            "success": True,
-            "message": f"Unit {data['unit_id']} assigned to division {data['division_id']}"
-        })
+        if result["success"]:
+            return jsonify(result)
+        else:
+            return jsonify({"error": result["error"]}), 500
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/incident/<incident_id>/units", methods=["GET"])
-def get_incident_units_new(incident_id):
+def get_incident_units(incident_id):
     """Get all units for an incident"""
     try:
         units = Unit.get_units_by_incident(incident_id)
@@ -363,7 +301,57 @@ def get_unit_history(unit_id):
         return jsonify({"error": str(e)}), 500
 
 
-# EXISTING ENDPOINTS (keeping original structure)
+# BACKWARD COMPATIBILITY ENDPOINTS
+
+@app.route("/api/unit/checkin", methods=["POST"])
+def unit_checkin_api():
+    """
+    Backward compatibility endpoint for unit check-in
+    Redirects to unified status update with staging status
+    """
+    try:
+        data = request.get_json()
+        
+        # Check if incident exists first
+        incident = Incident.get_incident_by_id(data.get("incident_id"), db_manager)
+        if not incident:
+            return jsonify({"error": "Incident not found"}), 404
+
+        # Map old checkin fields to new status update format
+        status_data = {
+            'incident_id': data.get('incident_id'),
+            'status': 'staging',  # Check-in is staging status
+            'unit_name': data.get('unit_id'),  # Use unit_id as name if no name provided
+            'unit_type': data.get('unit_type', 'Unknown'),
+            'unit_leader': data.get('company_officer'),
+            'contact_info': data.get('contact_info'),
+            'number_of_personnel': data.get('number_of_personnel'),
+            'bsar_tech': data.get('bsar_tech', False),
+            'latitude': data.get('latitude'),
+            'longitude': data.get('longitude'),
+            'notes': data.get('notes', 'Unit checked in'),
+            'user_name': data.get('company_officer')
+        }
+        
+        # Create unit and update status
+        unit = Unit()
+        unit.unit_id = data.get('unit_id')
+        result = unit.update_status(**status_data)
+        
+        if result["success"]:
+            return jsonify({
+                "success": True,
+                "unit_id": data.get('unit_id'),
+                "message": result["message"]
+            })
+        else:
+            return jsonify({"error": result["error"]}), 400
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# EXISTING INCIDENT ENDPOINTS
 
 @app.route("/api/incident", methods=["POST"])
 def create_incident():
@@ -539,74 +527,6 @@ def get_divisions(incident_id):
         return jsonify(
             {"success": True, "divisions": divisions, "count": len(divisions)}
         )
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-# BACKWARD COMPATIBILITY ENDPOINTS
-@app.route("/api/unit/<incident_id>/<unit_id>/status", methods=["POST"])
-def update_unit_status(incident_id, unit_id):
-    """Update unit status (backward compatibility)"""
-    try:
-        data = request.get_json()
-
-        new_status = data.get("status")
-        if not new_status:
-            return jsonify({"error": "Status is required"}), 400
-
-        # Get unit and update status
-        unit = Unit.get_unit_by_id(unit_id, incident_id, db_manager)
-        if not unit:
-            return jsonify({"error": "Unit not found"}), 404
-
-        success = unit.update_status(new_status)
-
-        if success:
-            return jsonify(
-                {
-                    "success": True,
-                    "message": f"Unit {unit_id} status updated to {new_status}",
-                }
-            )
-        else:
-            return jsonify({"error": "Failed to update unit status"}), 500
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/unit/<incident_id>/<unit_id>/location", methods=["POST"])
-def update_unit_location(incident_id, unit_id):
-    """Update unit location (backward compatibility)"""
-    try:
-        data = request.get_json()
-
-        latitude = data.get("latitude")
-        longitude = data.get("longitude")
-
-        if latitude is None or longitude is None:
-            return jsonify({"error": "Latitude and longitude are required"}), 400
-
-        try:
-            latitude = float(latitude)
-            longitude = float(longitude)
-        except (ValueError, TypeError):
-            return jsonify({"error": "Invalid coordinate values"}), 400
-
-        # Get unit and update location
-        unit = Unit.get_unit_by_id(unit_id, incident_id, db_manager)
-        if not unit:
-            return jsonify({"error": "Unit not found"}), 404
-
-        success = unit.update_location(latitude, longitude)
-
-        if success:
-            return jsonify(
-                {"success": True, "message": f"Unit {unit_id} location updated"}
-            )
-        else:
-            return jsonify({"error": "Failed to update unit location"}), 500
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
