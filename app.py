@@ -1,11 +1,12 @@
 from flask import Flask, render_template, request, jsonify
 from dotenv import load_dotenv
 import os
-import requests
 
 from models.database import DatabaseManager
 from models.incident import Incident
 from models.hospital import Hospital
+from models.unit import Unit
+from services.geocoding import GeocodingService
 
 # Load environment variables
 load_dotenv()
@@ -13,8 +14,9 @@ load_dotenv()
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-secret-key")
 
-# Initialize database
+# Initialize services
 db_manager = DatabaseManager()
+geocoding_service = GeocodingService()
 
 
 @app.route("/")
@@ -37,7 +39,7 @@ def unit_checkin(incident_id):
 
 @app.route("/api/geocode/reverse", methods=["POST"])
 def reverse_geocode():
-    """Reverse geocode coordinates to address"""
+    """Reverse geocode coordinates to address using GeocodingService"""
     try:
         data = request.get_json()
         
@@ -54,47 +56,50 @@ def reverse_geocode():
         except (ValueError, TypeError):
             return jsonify({"error": "Invalid latitude or longitude values"}), 400
         
-        # Make request to Nominatim
-        try:
-            nominatim_url = "https://nominatim.openstreetmap.org/reverse"
-            params = {
-                'format': 'json',
-                'lat': latitude,
-                'lon': longitude,
-                'zoom': 18,
-                'addressdetails': 1
-            }
-            
-            headers = {
-                'User-Agent': 'EmergencyIncidentApp/1.0 (Emergency Management System)'
-            }
-            
-            response = requests.get(nominatim_url, params=params, headers=headers, timeout=10)
-            
-            if response.status_code == 200:
-                geocode_data = response.json()
-                address = geocode_data.get('display_name')
-                
-                return jsonify({
-                    "success": True,
-                    "address": address,
-                    "data": geocode_data
-                })
-            else:
-                return jsonify({
-                    "success": False,
-                    "error": f"Geocoding service returned status {response.status_code}"
-                }), 500
-                
-        except requests.exceptions.Timeout:
+        # Use GeocodingService instead of direct API call
+        result = geocoding_service.reverse_geocode(latitude, longitude)
+        
+        if result['success']:
+            return jsonify({
+                "success": True,
+                "address": result['address'],
+                "formatted_address": result.get('formatted_address'),
+                "address_components": result.get('address_components'),
+                "data": result.get('raw_data')
+            })
+        else:
             return jsonify({
                 "success": False,
-                "error": "Geocoding request timed out"
+                "error": result['error']
             }), 500
-        except requests.exceptions.RequestException as e:
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/geocode/forward", methods=["POST"])
+def forward_geocode():
+    """Forward geocode address to coordinates using GeocodingService"""
+    try:
+        data = request.get_json()
+        
+        address = data.get("address")
+        if not address:
+            return jsonify({"error": "Address is required"}), 400
+        
+        # Use GeocodingService for forward geocoding
+        result = geocoding_service.forward_geocode(address)
+        
+        if result['success']:
+            return jsonify({
+                "success": True,
+                "results": result['results'],
+                "count": result['count']
+            })
+        else:
             return jsonify({
                 "success": False,
-                "error": f"Geocoding request failed: {str(e)}"
+                "error": result['error']
             }), 500
             
     except Exception as e:
@@ -178,75 +183,37 @@ def generate_divisions_preview():
 
 @app.route("/api/unit/checkin", methods=["POST"])
 def unit_checkin_api():
-    """Check in a unit to an incident"""
+    """Check in a unit to an incident using Unit model"""
     try:
         data = request.get_json()
         
-        # Validate required fields
-        required_fields = ['incident_id', 'unit_id', 'company_officer', 'number_of_personnel', 'latitude', 'longitude']
-        for field in required_fields:
-            if not data.get(field):
-                return jsonify({"error": f"{field.replace('_', ' ').title()} is required"}), 400
-        
-        # Validate numeric fields
-        try:
-            personnel_count = int(data['number_of_personnel'])
-            latitude = float(data['latitude'])
-            longitude = float(data['longitude'])
-        except (ValueError, TypeError):
-            return jsonify({"error": "Invalid number format for personnel count or coordinates"}), 400
-        
-        if personnel_count < 1:
-            return jsonify({"error": "Personnel count must be at least 1"}), 400
-        
-        # Check if incident exists
-        incident = Incident.get_incident_by_id(data['incident_id'], db_manager)
+        # Check if incident exists first
+        incident = Incident.get_incident_by_id(data.get('incident_id'), db_manager)
         if not incident:
             return jsonify({"error": "Incident not found"}), 404
         
-        # Check if unit already checked in
-        conn = db_manager.connect()
-        cursor = conn.cursor()
+        # Use Unit model for check-in process
+        unit = Unit(db_manager)
+        result = unit.checkin_to_incident(data)
         
-        cursor.execute("""
-            SELECT id FROM units 
-            WHERE incident_id = %s AND unit_id = %s
-        """, (data['incident_id'], data['unit_id']))
-        
-        existing_unit = cursor.fetchone()
-        if existing_unit:
-            cursor.close()
-            conn.close()
-            return jsonify({"error": f"Unit {data['unit_id']} is already checked in to this incident"}), 400
-        
-        # Insert unit
-        cursor.execute("""
-            INSERT INTO units (
-                incident_id, unit_id, company_officer, number_of_personnel, 
-                bsar_tech, latitude, longitude, notes
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id
-        """, (
-            data['incident_id'],
-            data['unit_id'],
-            data['company_officer'],
-            personnel_count,
-            data.get('bsar_tech', False),
-            latitude,
-            longitude,
-            data.get('notes', '')
-        ))
-        
-        unit_id = cursor.fetchone()[0]
-        conn.commit()
-        cursor.close()
-        conn.close()
-        
-        return jsonify({
-            "success": True,
-            "unit_id": data['unit_id'],
-            "message": f"Unit {data['unit_id']} checked in successfully"
-        })
+        if result['success']:
+            return jsonify({
+                "success": True,
+                "unit_id": result['unit_id'],
+                "message": result['message']
+            })
+        else:
+            # Determine appropriate HTTP status code
+            if "not found" in result['error'].lower():
+                status_code = 404
+            elif "already checked in" in result['error'].lower():
+                status_code = 400
+            elif "required" in result['error'].lower():
+                status_code = 400
+            else:
+                status_code = 500
+                
+            return jsonify({"error": result['error']}), status_code
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -254,37 +221,10 @@ def unit_checkin_api():
 
 @app.route("/api/incident/<incident_id>/units", methods=["GET"])
 def get_incident_units(incident_id):
-    """Get all units checked into an incident"""
+    """Get all units checked into an incident using Unit model"""
     try:
-        conn = db_manager.connect()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT 
-                unit_id, company_officer, number_of_personnel, bsar_tech,
-                latitude, longitude, status, checked_in_at, last_updated, notes
-            FROM units 
-            WHERE incident_id = %s 
-            ORDER BY checked_in_at DESC
-        """, (incident_id,))
-        
-        units = []
-        for row in cursor.fetchall():
-            units.append({
-                'unit_id': row[0],
-                'company_officer': row[1],
-                'number_of_personnel': row[2],
-                'bsar_tech': row[3],
-                'latitude': float(row[4]) if row[4] else None,
-                'longitude': float(row[5]) if row[5] else None,
-                'status': row[6],
-                'checked_in_at': row[7].isoformat() if row[7] else None,
-                'last_updated': row[8].isoformat() if row[8] else None,
-                'notes': row[9]
-            })
-        
-        cursor.close()
-        conn.close()
+        # Use Unit model static method
+        units = Unit.get_units_for_incident(incident_id, db_manager)
         
         return jsonify({
             "success": True,
@@ -476,6 +416,72 @@ def get_divisions(incident_id):
             "count": len(divisions)
         })
         
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/unit/<incident_id>/<unit_id>/status", methods=["POST"])
+def update_unit_status(incident_id, unit_id):
+    """Update unit status"""
+    try:
+        data = request.get_json()
+        
+        new_status = data.get("status")
+        if not new_status:
+            return jsonify({"error": "Status is required"}), 400
+        
+        # Get unit and update status
+        unit = Unit.get_unit_by_id(unit_id, incident_id, db_manager)
+        if not unit:
+            return jsonify({"error": "Unit not found"}), 404
+        
+        success = unit.update_status(new_status)
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": f"Unit {unit_id} status updated to {new_status}"
+            })
+        else:
+            return jsonify({"error": "Failed to update unit status"}), 500
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/unit/<incident_id>/<unit_id>/location", methods=["POST"])
+def update_unit_location(incident_id, unit_id):
+    """Update unit location"""
+    try:
+        data = request.get_json()
+        
+        latitude = data.get("latitude")
+        longitude = data.get("longitude")
+        
+        if latitude is None or longitude is None:
+            return jsonify({"error": "Latitude and longitude are required"}), 400
+        
+        try:
+            latitude = float(latitude)
+            longitude = float(longitude)
+        except (ValueError, TypeError):
+            return jsonify({"error": "Invalid coordinate values"}), 400
+        
+        # Get unit and update location
+        unit = Unit.get_unit_by_id(unit_id, incident_id, db_manager)
+        if not unit:
+            return jsonify({"error": "Unit not found"}), 404
+        
+        success = unit.update_location(latitude, longitude)
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": f"Unit {unit_id} location updated"
+            })
+        else:
+            return jsonify({"error": "Failed to update unit location"}), 500
+            
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
