@@ -26,7 +26,7 @@ CREATE TABLE search_divisions (
     estimated_area_m2 DECIMAL(12,2),
     assigned_team VARCHAR(255),
     team_leader VARCHAR(255),
-    priority INTEGER DEFAULT 1,
+    priority VARCHAR(10) DEFAULT 'Low',
     search_type VARCHAR(50) DEFAULT 'primary',
     estimated_duration VARCHAR(50),
     status VARCHAR(50) DEFAULT 'unassigned',
