@@ -745,8 +745,9 @@
                     // UPDATED POPUP CONTENT - SIMPLIFIED
                     const popupContent = `
                         <b>${division.division_name || division.name}</b><br>
+                        <strong>Priority:</strong> ${division.priority || 'Low'}<br>
                         <strong>Status:</strong> ${(division.status || 'unassigned').toUpperCase()}<br>
-                        <strong>Unit:</strong> ${division.assigned_team || 'Not assigned'}<br>
+                        <strong>Unit:</strong> ${division.assigned_unit_id || 'Not assigned'}<br>
                         <strong>Officer:</strong> ${division.team_leader || 'Not assigned'}
                     `;
                     
@@ -762,7 +763,7 @@
             console.log('Total features in divisionsGroup:', divisionsGroup.getLayers().length); // Debug
         }
         
-        // Display divisions
+        // Display divisions with assignment controls
         function displayDivisions(divisions) {
             if (!divisions || divisions.length === 0) {
                 document.getElementById('divisionsSummary').innerHTML = '<div class="text-muted">No search divisions created yet.</div>';
@@ -806,7 +807,7 @@
                 </div>
             `;
             
-            // Display division cards
+            // Display division cards with assignment controls
             const divisionsList = document.getElementById('divisionsList');
             divisionsList.innerHTML = divisions.map(division => {
                 const statusClass = division.status === 'assigned' ? 'success' : 
@@ -814,27 +815,153 @@
                 const borderClass = division.status === 'assigned' ? 'border-success' : 
                                    division.status === 'completed' ? 'border-info' : 'border-warning';
                 
+                const priorityClass = division.priority === 'High' ? 'danger' :
+                                     division.priority === 'Medium' ? 'warning' : 'secondary';
+                
                 return `
                     <div class="col-md-6 col-lg-4">
                         <div class="card h-100 ${borderClass}">
                             <div class="card-header">
-                                <h6 class="card-title mb-0">${division.division_name || division.name}</h6>
-                                <small class="text-muted">${division.division_id}</small>
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <h6 class="card-title mb-0">${division.division_name || division.name}</h6>
+                                        <small class="text-muted">${division.division_id}</small>
+                                    </div>
+                                    <span class="badge bg-${priorityClass}">${division.priority || 'Low'}</span>
+                                </div>
                             </div>
                             <div class="card-body">
                                 <div class="mb-2">
                                     <span class="badge bg-${statusClass}">${(division.status || 'unassigned').toUpperCase()}</span>
                                 </div>
+                                
+                                <!-- Unit Assignment -->
+                                <div class="mb-3">
+                                    <label class="form-label small">Assigned Unit:</label>
+                                    <select class="form-select form-select-sm" 
+                                            id="unit-select-${division.division_id}" 
+                                            onchange="assignUnitToDivision('${division.division_id}', this.value)">
+                                        <option value="">Select Unit...</option>
+                                    </select>
+                                </div>
+                                
+                                <!-- Priority Selection -->
+                                <div class="mb-3">
+                                    <label class="form-label small">Priority:</label>
+                                    <select class="form-select form-select-sm" 
+                                            id="priority-select-${division.division_id}"
+                                            onchange="updateDivisionPriority('${division.division_id}', this.value)">
+                                        <option value="High" ${division.priority === 'High' ? 'selected' : ''}>High</option>
+                                        <option value="Medium" ${division.priority === 'Medium' ? 'selected' : ''}>Medium</option>
+                                        <option value="Low" ${division.priority === 'Low' ? 'selected' : ''}>Low</option>
+                                    </select>
+                                </div>
+                                
                                 <div class="small">
                                     <div><strong>Team:</strong> ${division.assigned_team || '<em>Not assigned</em>'}</div>
                                     ${division.team_leader ? `<div><strong>Leader:</strong> ${division.team_leader}</div>` : ''}
-                                    ${division.priority ? `<div><strong>Priority:</strong> ${division.priority}</div>` : ''}
+                                    ${division.assigned_unit_id ? `<div><strong>Unit:</strong> ${division.assigned_unit_id}</div>` : ''}
                                 </div>
                             </div>
                         </div>
                     </div>
                 `;
             }).join('');
+            
+            // Load available units for dropdowns
+            loadAvailableUnits();
+        }
+
+        // Load available units for assignment dropdowns
+        async function loadAvailableUnits() {
+            try {
+                const response = await fetch(`/api/incident/${incidentId}/available-units`);
+                const data = await response.json();
+                
+                if (data.success && data.units) {
+                    // Update all unit dropdowns
+                    document.querySelectorAll('[id^="unit-select-"]').forEach(select => {
+                        const currentValue = select.value;
+                        
+                        // Clear existing options except first one
+                        select.innerHTML = '<option value="">Select Unit...</option>';
+                        
+                        // Add available units
+                        data.units.forEach(unit => {
+                            const option = document.createElement('option');
+                            option.value = unit.unit_id;
+                            option.textContent = `${unit.unit_id} - ${unit.unit_name || unit.unit_type}`;
+                            select.appendChild(option);
+                        });
+                        
+                        // Restore previous selection if still valid
+                        if (currentValue) {
+                            select.value = currentValue;
+                        }
+                    });
+                }
+            } catch (error) {
+                console.error('Error loading available units:', error);
+            }
+        }
+        
+        // Assign unit to division
+        async function assignUnitToDivision(divisionId, unitId) {
+            if (!unitId) return;
+            
+            try {
+                const response = await fetch(`/api/incident/${incidentId}/division/${divisionId}/assign-unit`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        unit_id: unitId
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showStatus(`Unit ${unitId} assigned to division ${divisionId}`, 'success');
+                    // Reload divisions to reflect changes
+                    loadDivisions();
+                    loadUnits(); // Refresh units list
+                } else {
+                    showStatus(`Error assigning unit: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                console.error('Error assigning unit to division:', error);
+                showStatus('Error assigning unit to division', 'error');
+            }
+        }
+        
+        // Update division priority
+        async function updateDivisionPriority(divisionId, priority) {
+            try {
+                const response = await fetch(`/api/incident/${incidentId}/division/${divisionId}/priority`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        priority: priority
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showStatus(`Division ${divisionId} priority updated to ${priority}`, 'success');
+                    // Reload divisions to reflect changes
+                    loadDivisions();
+                } else {
+                    showStatus(`Error updating priority: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                console.error('Error updating division priority:', error);
+                showStatus('Error updating division priority', 'error');
+            }
         }
         
         // Update map with incident data
