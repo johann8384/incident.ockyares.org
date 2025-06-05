@@ -90,18 +90,22 @@ class Unit:
             """, (new_status, incident_id, division_id, self.unit_id))
             
             # Log to status history
-            location_wkt = None
             if latitude is not None and longitude is not None:
-                location_wkt = f"POINT({longitude} {latitude})"
-            
-            cursor.execute("""
-                INSERT INTO unit_status_history 
-                (unit_id, incident_id, division_id, status, percentage_complete, 
-                 location, notes, user_name)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, (self.unit_id, incident_id, division_id, new_status, percentage_complete,
-                  f"ST_GeomFromText('{location_wkt}', 4326)" if location_wkt else None,
-                  notes, user_name))
+                cursor.execute("""
+                    INSERT INTO unit_status_history 
+                    (unit_id, incident_id, division_id, status, percentage_complete, 
+                     location, notes, user_name)
+                    VALUES (%s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s, %s)
+                """, (self.unit_id, incident_id, division_id, new_status, percentage_complete,
+                      float(longitude), float(latitude), notes, user_name))
+            else:
+                cursor.execute("""
+                    INSERT INTO unit_status_history 
+                    (unit_id, incident_id, division_id, status, percentage_complete, 
+                     notes, user_name)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (self.unit_id, incident_id, division_id, new_status, percentage_complete,
+                      notes, user_name))
             
             # If status is out_of_service, unassign from divisions
             if new_status == self.STATUS_OUT_OF_SERVICE:
@@ -194,6 +198,24 @@ class Unit:
                     WHERE ush.unit_id = %s
                     ORDER BY ush.timestamp DESC
                 """, (unit_id,))
+            
+            return cursor.fetchall()
+            
+        finally:
+            cursor.close()
+            conn.close()
+
+    @staticmethod 
+    def get_all_units():
+        """Get all units in the system"""
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        
+        try:
+            cursor.execute("""
+                SELECT * FROM units 
+                ORDER BY unit_name
+            """)
             
             return cursor.fetchall()
             
