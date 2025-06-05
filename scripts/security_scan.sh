@@ -1,54 +1,40 @@
 #!/bin/bash
-set -e
 
-echo "🔒 Running comprehensive security scan..."
+echo "🔒 Running comprehensive security scan in Docker..."
+
+# Detect which docker compose command to use
+if command -v "docker-compose" &> /dev/null; then
+    DOCKER_COMPOSE="docker-compose"
+elif docker compose version &> /dev/null; then
+    DOCKER_COMPOSE="docker compose"
+else
+    echo "❌ Neither docker-compose nor docker compose found!"
+    exit 1
+fi
+
+echo "Using: $DOCKER_COMPOSE"
 
 # Create reports directory
 mkdir -p security-reports
 
-# Install security tools
-echo "Installing security tools..."
-pip install bandit safety pip-audit
+# Clean up any existing containers
+$DOCKER_COMPOSE -f docker-compose.security.yml down 2>/dev/null || true
 
-# 1. Python security scan
-echo "🐍 Running Python security scans..."
-bandit -r . -f json -o security-reports/bandit-report.json || true
-bandit -r . -f txt
+# Run security scanning in container (don't fail on scan findings)
+echo "🔍 Starting security scan container..."
+$DOCKER_COMPOSE -f docker-compose.security.yml up --build
 
-safety check --json --output security-reports/safety-report.json || true
-safety check
-
-pip-audit --format=json --output=security-reports/pip-audit-report.json || true
-pip-audit
-
-# 2. Docker security scan
-echo "🐳 Running Docker security scans..."
-docker build -t emergency-incident-app:security-test .
-
-# Hadolint
-if command -v hadolint &> /dev/null; then
-    hadolint Dockerfile > security-reports/hadolint-report.txt || true
-else
-    echo "Hadolint not found, skipping Dockerfile lint"
-fi
-
-# Trivy (if available)
-if command -v trivy &> /dev/null; then
-    trivy image --format json --output security-reports/trivy-report.json \
-        emergency-incident-app:security-test || true
-else
-    echo "Trivy not found, skipping container vulnerability scan"
-fi
-
-# 3. Secret scan
-echo "🔍 Scanning for secrets..."
-if command -v gitleaks &> /dev/null; then
-    gitleaks detect --source . --report-format json \
-        --report-path security-reports/gitleaks-report.json || true
-else
-    echo "Gitleaks not found, skipping secret scan"
-fi
+# Always clean up regardless of scan results
+$DOCKER_COMPOSE -f docker-compose.security.yml down 2>/dev/null || true
 
 echo "✅ Security scan complete!"
-echo "📁 Reports saved in security-reports/ directory"
-ls -la security-reports/
+echo "📁 Reports saved in security-reports/ directory:"
+ls -la security-reports/ 2>/dev/null || echo "No reports directory found"
+
+# Generate summary if script exists
+if [ -f "scripts/security_summary.py" ]; then
+    echo "📊 Generating security summary..."
+    python scripts/security_summary.py || echo "Failed to generate summary"
+fi
+
+echo "🔒 Security scanning finished - check reports for findings"

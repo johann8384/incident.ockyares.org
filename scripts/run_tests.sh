@@ -1,41 +1,40 @@
 #!/bin/bash
 set -e
 
-echo "🧪 Starting test run..."
+echo "🧪 Running tests in Docker containers..."
 
-# Start test database if not running
-if ! docker ps | grep -q test_postgis; then
-    echo "Starting test database..."
-    docker run -d \
-        --name test_postgis \
-        -e POSTGRES_DB=emergency_ops_test \
-        -e POSTGRES_USER=postgres \
-        -e POSTGRES_PASSWORD=test_password \
-        -p 5433:5432 \
-        postgis/postgis:15-3.3
-    
-    echo "Waiting for database to be ready..."
-    sleep 15
+# Detect which docker compose command to use
+if command -v "docker-compose" &> /dev/null; then
+    DOCKER_COMPOSE="docker-compose"
+elif docker compose version &> /dev/null; then
+    DOCKER_COMPOSE="docker compose"
+else
+    echo "❌ Neither docker-compose nor docker compose found!"
+    exit 1
 fi
 
-# Set environment variables
-export TEST_DB_HOST=localhost
-export TEST_DB_PORT=5433
-export TEST_DB_USER=postgres
-export TEST_DB_PASSWORD=test_password
-export FLASK_ENV=testing
+echo "Using: $DOCKER_COMPOSE"
 
-# Install test dependencies
-pip install -r test-requirements.txt
+# Clean up any existing test containers
+$DOCKER_COMPOSE -f docker-compose.test.yml down -v 2>/dev/null || true
 
-# Run tests
-echo "Running tests with coverage..."
-python -m pytest tests/ -v --cov=app --cov=models --cov-report=html --cov-report=term-missing
+# Build and run tests
+$DOCKER_COMPOSE -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from test_runner
+
+# Extract coverage reports from Docker volume
+echo "📊 Extracting coverage reports..."
+docker run --rm -v incidentockyaresorg_test_coverage:/src -v $(pwd):/dest alpine sh -c "
+    cp -r /src/* /dest/ 2>/dev/null || echo 'No coverage files to copy'
+"
+
+# Clean up
+$DOCKER_COMPOSE -f docker-compose.test.yml down -v
 
 echo "✅ Tests completed!"
-echo "📊 Coverage report: htmlcov/index.html"
-
-# Cleanup
-echo "Cleaning up test database..."
-docker stop test_postgis || true
-docker rm test_postgis || true
+if [ -f "coverage.xml" ] || [ -d "htmlcov" ]; then
+    echo "📊 Coverage reports extracted successfully!"
+    [ -d "htmlcov" ] && echo "📊 HTML coverage: htmlcov/index.html"
+    [ -f "coverage.xml" ] && echo "📊 XML coverage: coverage.xml"
+else
+    echo "⚠️  Coverage reports not found"
+fi

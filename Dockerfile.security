@@ -1,0 +1,43 @@
+FROM python:3.11-slim
+
+# Install system dependencies including gnupg
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    wget \
+    unzip \
+    gnupg \
+    lsb-release \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install security tools
+RUN pip install --no-cache-dir \
+    bandit \
+    safety \
+    pip-audit \
+    semgrep
+
+# Install Hadolint
+RUN wget -O /usr/local/bin/hadolint \
+    https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64 && \
+    chmod +x /usr/local/bin/hadolint
+
+# Install Trivy (updated method without apt-key which is deprecated)
+RUN wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor -o /usr/share/keyrings/trivy.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | tee /etc/apt/sources.list.d/trivy.list && \
+    apt-get update && \
+    apt-get install -y trivy && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Gitleaks
+RUN wget -O gitleaks.tar.gz \
+    https://github.com/gitleaks/gitleaks/releases/download/v8.18.0/gitleaks_8.18.0_linux_x64.tar.gz && \
+    tar -xzf gitleaks.tar.gz && \
+    mv gitleaks /usr/local/bin/ && \
+    rm gitleaks.tar.gz
+
+WORKDIR /app
+
+# Default command runs all security scans
+CMD ["/app/scripts/security_scan_docker.sh"]

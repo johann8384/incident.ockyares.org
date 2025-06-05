@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Unit Checkin - Emergency Incident Management</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        #locationMap {
+            height: 300px;
+            width: 100%;
+            border-radius: 0.375rem;
+        }
+        .location-controls {
+            margin-bottom: 1rem;
+        }
+        .form-container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <div class="form-container">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title mb-0">Unit Checkin</h2>
+                    <p class="card-text text-muted mb-0">Incident: <span id="incidentId">{{ incident_id }}</span></p>
+                </div>
+                <div class="card-body">
+                    <form id="checkinForm">
+                        <div class="mb-3">
+                            <label for="unitId" class="form-label">Unit ID</label>
+                            <input type="text" class="form-control" id="unitId" name="unit_id" required 
+                                   placeholder="e.g., 4534">
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="companyOfficer" class="form-label">Company Officer</label>
+                            <input type="text" class="form-control" id="companyOfficer" name="company_officer" required 
+                                   placeholder="e.g., Jones">
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="personnel" class="form-label">Number of Personnel</label>
+                            <input type="number" class="form-control" id="personnel" name="number_of_personnel" 
+                                   min="1" required>
+                        </div>
+
+                        <div class="mb-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="bsarTech" name="bsar_tech">
+                                <label class="form-check-label" for="bsarTech">
+                                    BSAR Tech
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Current Location</label>
+                            <div class="location-controls">
+                                <div class="row g-2">
+                                    <div class="col-6">
+                                        <button type="button" class="btn btn-outline-primary w-100" id="getCurrentLocation">
+                                            📍 Get Device Location
+                                        </button>
+                                    </div>
+                                    <div class="col-6">
+                                        <button type="button" class="btn btn-outline-secondary w-100" id="clearLocation">
+                                            Clear Location
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="locationMap"></div>
+                            <div class="mt-2">
+                                <small class="text-muted">
+                                    <span id="locationDisplay">Click "Get Device Location" or click on the map to set location</span>
+                                </small>
+                            </div>
+                            <input type="hidden" id="latitude" name="latitude">
+                            <input type="hidden" id="longitude" name="longitude">
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="notes" class="form-label">Notes (Optional)</label>
+                            <textarea class="form-control" id="notes" name="notes" rows="3" 
+                                      placeholder="Additional information..."></textarea>
+                        </div>
+
+                        <div class="d-grid gap-2">
+                            <button type="submit" class="btn btn-primary">Check In Unit</button>
+                            <a href="/incident/{{ incident_id }}" class="btn btn-outline-secondary">Back to Incident</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Success Modal -->
+    <div class="modal fade" id="successModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Unit Checked In Successfully</h5>
+                </div>
+                <div class="modal-body">
+                    <p>Unit <span id="checkedInUnitId"></span> has been successfully checked in.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-primary" onclick="window.location.href='/incident/{{ incident_id }}'">
+                        Return to Incident
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary" onclick="resetForm()">
+                        Check In Another Unit
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const incidentId = '{{ incident_id }}';
+        let map;
+        let currentMarker;
+
+        // Initialize map
+        function initMap() {
+            // Default to Louisville area
+            map = L.map('locationMap').setView([38.2527, -85.7585], 13);
+            
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
+
+            // Add click handler for map
+            map.on('click', function(e) {
+                setLocation(e.latlng.lat, e.latlng.lng);
+            });
+        }
+
+        // Set location on map and form
+        function setLocation(lat, lng) {
+            document.getElementById('latitude').value = lat;
+            document.getElementById('longitude').value = lng;
+            
+            // Remove existing marker
+            if (currentMarker) {
+                map.removeLayer(currentMarker);
+            }
+            
+            // Add new marker
+            currentMarker = L.marker([lat, lng]).addTo(map);
+            
+            // Update display
+            document.getElementById('locationDisplay').textContent = 
+                `Location: ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+            
+            // Center map on location
+            map.setView([lat, lng], Math.max(map.getZoom(), 15));
+        }
+
+        // Get device location
+        document.getElementById('getCurrentLocation').addEventListener('click', function() {
+            const button = this;
+            const originalText = button.textContent;
+            
+            button.textContent = 'Getting location...';
+            button.disabled = true;
+            
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    function(position) {
+                        setLocation(position.coords.latitude, position.coords.longitude);
+                        button.textContent = originalText;
+                        button.disabled = false;
+                    },
+                    function(error) {
+                        alert('Error getting location: ' + error.message);
+                        button.textContent = originalText;
+                        button.disabled = false;
+                    },
+                    {
+                        enableHighAccuracy: true,
+                        timeout: 10000,
+                        maximumAge: 300000
+                    }
+                );
+            } else {
+                alert('Geolocation is not supported by this browser.');
+                button.textContent = originalText;
+                button.disabled = false;
+            }
+        });
+
+        // Clear location
+        document.getElementById('clearLocation').addEventListener('click', function() {
+            document.getElementById('latitude').value = '';
+            document.getElementById('longitude').value = '';
+            document.getElementById('locationDisplay').textContent = 
+                'Click "Get Device Location" or click on the map to set location';
+            
+            if (currentMarker) {
+                map.removeLayer(currentMarker);
+                currentMarker = null;
+            }
+        });
+
+        // Handle form submission
+        document.getElementById('checkinForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            const data = Object.fromEntries(formData.entries());
+            data.incident_id = incidentId;
+            data.bsar_tech = document.getElementById('bsarTech').checked;
+            
+            // Validate location
+            if (!data.latitude || !data.longitude) {
+                alert('Please set the unit location on the map.');
+                return;
+            }
+            
+            // Submit form
+            fetch('/api/unit/checkin', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(data)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    document.getElementById('checkedInUnitId').textContent = data.unit_id;
+                    new bootstrap.Modal(document.getElementById('successModal')).show();
+                } else {
+                    alert('Error checking in unit: ' + (data.error || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error checking in unit. Please try again.');
+            });
+        });
+
+        // Reset form for another checkin
+        function resetForm() {
+            document.getElementById('checkinForm').reset();
+            document.getElementById('clearLocation').click();
+            bootstrap.Modal.getInstance(document.getElementById('successModal')).hide();
+        }
+
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            initMap();
+        });
+    </script>
+</body>
+</html>
