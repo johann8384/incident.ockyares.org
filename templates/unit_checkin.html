@@ -6,23 +6,9 @@
     <title>Unit Checkin - Emergency Incident Management</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <style>
-        #locationMap {
-            height: 300px;
-            width: 100%;
-            border-radius: 0.375rem;
-        }
-        .location-controls {
-            margin-bottom: 1rem;
-        }
-        .form-container {
-            max-width: 600px;
-            margin: 0 auto;
-        }
-        .incident-marker {
-            filter: hue-rotate(120deg); /* Green color for incident marker */
-        }
-    </style>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    <!-- Common CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/common.css') }}">
 </head>
 <body>
     <div class="container mt-4">
@@ -128,211 +114,16 @@
         </div>
     </div>
 
+    <!-- Alert Container -->
+    <div class="position-fixed top-0 end-0 p-3" style="z-index: 11">
+        <div id="alertContainer"></div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script>
-        const incidentId = '{{ incident_id }}';
-        let map;
-        let currentMarker;
-        let incidentMarker;
-        let incidentData = null;
-
-        // Initialize map
-        function initMap() {
-            // Default to Louisville area
-            map = L.map('locationMap').setView([38.2527, -85.7585], 13);
-            
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '© OpenStreetMap contributors'
-            }).addTo(map);
-
-            // Add click handler for map
-            map.on('click', function(e) {
-                setLocation(e.latlng.lat, e.latlng.lng);
-            });
-
-            // Load incident data and add incident marker
-            loadIncidentData();
-        }
-
-        // Load incident data
-        function loadIncidentData() {
-            fetch(`/api/incident/${incidentId}`)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success && data.incident) {
-                        incidentData = data.incident;
-                        
-                        // Update incident location display
-                        if (incidentData.address) {
-                            document.getElementById('incidentLocation').textContent = incidentData.address;
-                        } else if (incidentData.incident_location) {
-                            const coords = incidentData.incident_location.coordinates;
-                            document.getElementById('incidentLocation').textContent = 
-                                `${coords[1].toFixed(6)}, ${coords[0].toFixed(6)}`;
-                        }
-                        
-                        // Add incident marker if location exists
-                        if (incidentData.incident_location) {
-                            const coords = incidentData.incident_location.coordinates;
-                            const lat = coords[1];
-                            const lng = coords[0];
-                            
-                            // Create custom green icon for incident
-                            const incidentIcon = L.divIcon({
-                                html: '<div style="background-color: #28a745; width: 25px; height: 25px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>',
-                                iconSize: [25, 25],
-                                iconAnchor: [12, 12],
-                                className: 'incident-marker'
-                            });
-                            
-                            incidentMarker = L.marker([lat, lng], { icon: incidentIcon })
-                                .addTo(map)
-                                .bindPopup(`<strong>Incident Location</strong><br>${incidentData.name}`);
-                            
-                            // Center map on incident location
-                            map.setView([lat, lng], 14);
-                        }
-                    }
-                })
-                .catch(error => {
-                    console.error('Error loading incident data:', error);
-                    document.getElementById('incidentLocation').textContent = 'Unable to load';
-                });
-        }
-
-        // Set location on map and form
-        function setLocation(lat, lng) {
-            document.getElementById('latitude').value = lat;
-            document.getElementById('longitude').value = lng;
-            
-            // Remove existing unit marker
-            if (currentMarker) {
-                map.removeLayer(currentMarker);
-            }
-            
-            // Add new unit marker (default blue)
-            currentMarker = L.marker([lat, lng])
-                .addTo(map)
-                .bindPopup('<strong>Unit Location</strong>');
-            
-            // Update display
-            document.getElementById('locationDisplay').textContent = 
-                `Unit Location: ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
-            
-            // Center map on location if incident marker doesn't exist
-            if (!incidentMarker) {
-                map.setView([lat, lng], Math.max(map.getZoom(), 15));
-            }
-        }
-
-        // Get device location
-        document.getElementById('getCurrentLocation').addEventListener('click', function() {
-            const button = this;
-            const originalText = button.textContent;
-            
-            button.textContent = 'Getting location...';
-            button.disabled = true;
-            
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(
-                    function(position) {
-                        setLocation(position.coords.latitude, position.coords.longitude);
-                        button.textContent = originalText;
-                        button.disabled = false;
-                    },
-                    function(error) {
-                        alert('Error getting location: ' + error.message);
-                        button.textContent = originalText;
-                        button.disabled = false;
-                    },
-                    {
-                        enableHighAccuracy: true,
-                        timeout: 10000,
-                        maximumAge: 300000
-                    }
-                );
-            } else {
-                alert('Geolocation is not supported by this browser.');
-                button.textContent = originalText;
-                button.disabled = false;
-            }
-        });
-
-        // Clear location
-        document.getElementById('clearLocation').addEventListener('click', function() {
-            document.getElementById('latitude').value = '';
-            document.getElementById('longitude').value = '';
-            document.getElementById('locationDisplay').textContent = 
-                'Click "Get Device Location" or click on the map to set location';
-            
-            if (currentMarker) {
-                map.removeLayer(currentMarker);
-                currentMarker = null;
-            }
-        });
-
-        // Handle form submission
-        document.getElementById('checkinForm').addEventListener('submit', function(e) {
-            e.preventDefault();
-            
-            const formData = new FormData(this);
-            const data = Object.fromEntries(formData.entries());
-            data.incident_id = incidentId;
-            data.bsar_tech = document.getElementById('bsarTech').checked;
-            
-            // Validate location
-            if (!data.latitude || !data.longitude) {
-                alert('Please set the unit location on the map.');
-                return;
-            }
-            
-            // Submit form using new unified endpoint
-            fetch(`/api/unit/${data.unit_id}/status`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    incident_id: data.incident_id,
-                    status: 'staging', // Check-in is staging status
-                    unit_name: data.unit_id, // Use unit_id as name
-                    unit_type: 'Unknown', // Default type
-                    unit_leader: data.company_officer,
-                    number_of_personnel: parseInt(data.number_of_personnel),
-                    bsar_tech: data.bsar_tech,
-                    latitude: parseFloat(data.latitude),
-                    longitude: parseFloat(data.longitude),
-                    notes: data.notes || 'Unit checked in',
-                    user_name: data.company_officer
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    document.getElementById('checkedInUnitId').textContent = document.getElementById('unitId').value;
-                    new bootstrap.Modal(document.getElementById('successModal')).show();
-                } else {
-                    alert('Error checking in unit: ' + (data.error || 'Unknown error'));
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                alert('Error checking in unit. Please try again.');
-            });
-        });
-
-        // Reset form for another checkin
-        function resetForm() {
-            document.getElementById('checkinForm').reset();
-            document.getElementById('clearLocation').click();
-            bootstrap.Modal.getInstance(document.getElementById('successModal')).hide();
-        }
-
-        // Initialize when page loads
-        document.addEventListener('DOMContentLoaded', function() {
-            initMap();
-        });
-    </script>
+    <!-- Common JS -->
+    <script src="{{ url_for('static', filename='js/common.js') }}"></script>
+    <!-- Page-specific JS -->
+    <script src="{{ url_for('static', filename='js/unit-checkin.js') }}"></script>
 </body>
 </html>
