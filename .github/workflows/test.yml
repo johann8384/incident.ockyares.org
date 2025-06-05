@@ -2,9 +2,9 @@ name: Test and Quality Assurance
 
 on:
   push:
-    branches: [ main, develop, fresh-start ]
+    branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, develop ]
 
 # Cancel previous runs when new commits are pushed
 concurrency:
