@@ -1,6 +1,6 @@
 """
-Unit Model - Represents emergency response units and their management
-Enhanced with comprehensive status tracking
+Unit Model - Unified status tracking system
+All unit interactions are status updates, including initial check-in
 """
 
 import logging
@@ -12,7 +12,7 @@ import psycopg2.extras
 
 logger = logging.getLogger(__name__)
 
-# Database config for status functionality (fallback to environment)
+# Database config
 DB_CONFIG = {
     'host': os.getenv('DB_HOST', 'postgis'),
     'port': os.getenv('DB_PORT', '5432'),
@@ -23,424 +23,180 @@ DB_CONFIG = {
 
 
 class Unit:
-    """Represents an emergency response unit with enhanced status tracking"""
+    """Represents an emergency response unit with unified status tracking"""
 
-    # Unit status constants (NEW)
-    STATUS_STAGING = 'staging'
+    # Unit status constants
+    STATUS_QUARTERS = 'quarters'
+    STATUS_STAGING = 'staging'  # Initial check-in status
     STATUS_ASSIGNED = 'assigned' 
     STATUS_OPERATING = 'operating'
     STATUS_RECOVERING = 'recovering'
     STATUS_OUT_OF_SERVICE = 'out_of_service'
-    STATUS_QUARTERS = 'quarters'
     
     VALID_STATUSES = [
-        STATUS_STAGING, STATUS_ASSIGNED, STATUS_OPERATING,
-        STATUS_RECOVERING, STATUS_OUT_OF_SERVICE, STATUS_QUARTERS
+        STATUS_QUARTERS, STATUS_STAGING, STATUS_ASSIGNED, 
+        STATUS_OPERATING, STATUS_RECOVERING, STATUS_OUT_OF_SERVICE
     ]
 
-    def __init__(self, db_manager=None, unit_data: Optional[Dict[str, Any]] = None):
-        self.db_manager = db_manager
-
+    def __init__(self, unit_data: Optional[Dict[str, Any]] = None):
         # Initialize from data if provided
         if unit_data:
             self.id = unit_data.get("id")
-            self.incident_id = unit_data.get("incident_id")
             self.unit_id = unit_data.get("unit_id")
-            self.company_officer = unit_data.get("company_officer")
-            self.number_of_personnel = unit_data.get("number_of_personnel")
-            self.bsar_tech = unit_data.get("bsar_tech", False)
-            self.latitude = unit_data.get("latitude")
-            self.longitude = unit_data.get("longitude")
-            self.status = unit_data.get("status", "active")
-            self.checked_in_at = unit_data.get("checked_in_at")
-            self.last_updated = unit_data.get("last_updated")
-            self.notes = unit_data.get("notes", "")
-            
-            # NEW: Enhanced status fields
             self.unit_name = unit_data.get("unit_name")
             self.unit_type = unit_data.get("unit_type")
             self.unit_leader = unit_data.get("unit_leader")
+            self.contact_info = unit_data.get("contact_info")
+            self.number_of_personnel = unit_data.get("number_of_personnel")
+            self.bsar_tech = unit_data.get("bsar_tech", False)
             self.current_status = unit_data.get("current_status", self.STATUS_QUARTERS)
+            self.current_incident_id = unit_data.get("current_incident_id")
             self.current_division_id = unit_data.get("current_division_id")
+            self.created_at = unit_data.get("created_at")
         else:
             # Initialize empty unit
             self.id = None
-            self.incident_id = None
             self.unit_id = None
-            self.company_officer = None
-            self.number_of_personnel = None
-            self.bsar_tech = False
-            self.latitude = None
-            self.longitude = None
-            self.status = "active"
-            self.checked_in_at = None
-            self.last_updated = None
-            self.notes = ""
-            
-            # NEW: Enhanced status fields
             self.unit_name = None
             self.unit_type = None
             self.unit_leader = None
+            self.contact_info = None
+            self.number_of_personnel = None
+            self.bsar_tech = False
             self.current_status = self.STATUS_QUARTERS
+            self.current_incident_id = None
             self.current_division_id = None
+            self.created_at = None
 
-    def validate_checkin_data(self, data: Dict[str, Any]) -> Dict[str, str]:
-        """
-        Validate unit check-in data
-
-        Args:
-            data: Dictionary containing unit check-in data
-
-        Returns:
-            Dictionary with validation results {'valid': bool, 'errors': list}
-        """
+    def validate_status_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate unit status update data"""
         errors = []
 
         # Required fields
-        required_fields = [
-            "incident_id",
-            "unit_id",
-            "company_officer",
-            "number_of_personnel",
-            "latitude",
-            "longitude",
-        ]
-
+        required_fields = ["incident_id", "status", "unit_id"]
         for field in required_fields:
             if not data.get(field):
                 field_name = field.replace("_", " ").title()
                 errors.append(f"{field_name} is required")
 
-        # Validate numeric fields
-        try:
-            personnel_count = int(data.get("number_of_personnel", 0))
-            if personnel_count < 1:
-                errors.append("Personnel count must be at least 1")
-        except (ValueError, TypeError):
-            errors.append("Invalid personnel count format")
+        # Validate status
+        if data.get("status") and data["status"] not in self.VALID_STATUSES:
+            errors.append(f"Invalid status. Must be one of: {', '.join(self.VALID_STATUSES)}")
 
-        try:
-            latitude = float(data.get("latitude", 0))
-            longitude = float(data.get("longitude", 0))
+        # For staging (check-in), require additional fields
+        if data.get("status") == self.STATUS_STAGING:
+            checkin_fields = ["unit_name", "unit_type", "unit_leader", "latitude", "longitude"]
+            for field in checkin_fields:
+                if not data.get(field):
+                    field_name = field.replace("_", " ").title()
+                    errors.append(f"{field_name} is required for check-in")
 
-            # Basic coordinate validation
-            if not (-90 <= latitude <= 90):
-                errors.append("Latitude must be between -90 and 90")
-            if not (-180 <= longitude <= 180):
-                errors.append("Longitude must be between -180 and 180")
+            # Validate coordinates for staging
+            try:
+                if data.get("latitude") is not None and data.get("longitude") is not None:
+                    latitude = float(data["latitude"])
+                    longitude = float(data["longitude"])
+                    if not (-90 <= latitude <= 90):
+                        errors.append("Latitude must be between -90 and 90")
+                    if not (-180 <= longitude <= 180):
+                        errors.append("Longitude must be between -180 and 180")
+            except (ValueError, TypeError):
+                errors.append("Invalid coordinate format")
 
-        except (ValueError, TypeError):
-            errors.append("Invalid coordinate format")
+            # Validate personnel count
+            try:
+                if data.get("number_of_personnel"):
+                    personnel_count = int(data["number_of_personnel"])
+                    if personnel_count < 1:
+                        errors.append("Personnel count must be at least 1")
+            except (ValueError, TypeError):
+                errors.append("Invalid personnel count format")
 
         return {"valid": len(errors) == 0, "errors": errors}
 
-    def is_already_checked_in(self, incident_id: str, unit_id: str) -> bool:
+    def update_status(self, incident_id: str, new_status: str, division_id: str = None, 
+                     percentage_complete: int = 0, latitude: float = None, 
+                     longitude: float = None, notes: str = None, user_name: str = None,
+                     unit_name: str = None, unit_type: str = None, unit_leader: str = None,
+                     contact_info: str = None, number_of_personnel: int = None, 
+                     bsar_tech: bool = False) -> Dict[str, Any]:
         """
-        Check if unit is already checked into the incident
-
+        Universal status update method that handles both check-ins and status changes
+        
         Args:
             incident_id: Incident ID
-            unit_id: Unit ID
-
-        Returns:
-            True if unit is already checked in
-        """
-        try:
-            conn = self.db_manager.connect()
-            cursor = conn.cursor()
-
-            cursor.execute(
-                """
-                SELECT id FROM units 
-                WHERE incident_id = %s AND unit_id = %s
-            """,
-                (incident_id, unit_id),
-            )
-
-            result = cursor.fetchone()
-            cursor.close()
-            self.db_manager.close()  # Properly close connection
-
-            return result is not None
-
-        except Exception as e:
-            logger.error(f"Error checking unit status: {e}")
-            return False
-
-    def checkin_to_incident(self, checkin_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Check in unit to an incident
-
-        Args:
-            checkin_data: Dictionary containing all check-in information
-
-        Returns:
-            Dictionary with result {'success': bool, 'unit_id': str, 'message': str, 'error': str}
-        """
-        try:
-            # Validate data
-            validation = self.validate_checkin_data(checkin_data)
-            if not validation["valid"]:
-                return {"success": False, "error": "; ".join(validation["errors"])}
-
-            # Check if unit already checked in
-            if self.is_already_checked_in(
-                checkin_data["incident_id"], checkin_data["unit_id"]
-            ):
-                return {
-                    "success": False,
-                    "error": f"Unit {checkin_data['unit_id']} is already checked in to this incident",
-                }
-
-            # Insert unit into database
-            conn = self.db_manager.connect()
-            cursor = conn.cursor()
-
-            cursor.execute(
-                """
-                INSERT INTO units (
-                    incident_id, unit_id, company_officer, number_of_personnel, 
-                    bsar_tech, latitude, longitude, notes, status, checked_in_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id
-            """,
-                (
-                    checkin_data["incident_id"],
-                    checkin_data["unit_id"],
-                    checkin_data["company_officer"],
-                    int(checkin_data["number_of_personnel"]),
-                    checkin_data.get("bsar_tech", False),
-                    float(checkin_data["latitude"]),
-                    float(checkin_data["longitude"]),
-                    checkin_data.get("notes", ""),
-                    "active",
-                    datetime.now(),
-                ),
-            )
-
-            unit_db_id = cursor.fetchone()[0]
+            new_status: New status value
+            division_id: Division assignment (optional)
+            percentage_complete: Progress percentage (optional)
+            latitude: Location latitude (optional)
+            longitude: Location longitude (optional) 
+            notes: Status notes (optional)
+            user_name: User making the update (optional)
+            unit_name: Unit name (required for staging/check-in)
+            unit_type: Unit type (required for staging/check-in)
+            unit_leader: Unit leader (required for staging/check-in)
+            contact_info: Contact information (optional)
+            number_of_personnel: Personnel count (optional)
+            bsar_tech: BSAR tech availability (optional)
             
-            # NEW: Also insert into new units table if it exists
-            try:
-                # Check if new units table exists and create entry there
+        Returns:
+            Dictionary with result
+        """
+        
+        # Validate status
+        if new_status not in self.VALID_STATUSES:
+            return {"success": False, "error": f"Invalid status: {new_status}"}
+            
+        conn = None
+        cursor = None
+        try:
+            conn = psycopg2.connect(**DB_CONFIG)
+            cursor = conn.cursor()
+            
+            # For staging (check-in), create or update unit record
+            if new_status == self.STATUS_STAGING:
+                if not all([unit_name, unit_type, unit_leader]):
+                    return {"success": False, "error": "Unit name, type, and leader required for check-in"}
+                
+                # Create/update unit record
                 cursor.execute("""
                     INSERT INTO units (unit_id, unit_name, unit_type, unit_leader, 
-                                     current_status, current_incident_id)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                                     contact_info, number_of_personnel, bsar_tech,
+                                     current_status, current_incident_id, current_division_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (unit_id) DO UPDATE SET
-                        current_status = %s,
-                        current_incident_id = %s
+                        unit_name = EXCLUDED.unit_name,
+                        unit_type = EXCLUDED.unit_type,
+                        unit_leader = EXCLUDED.unit_leader,
+                        contact_info = EXCLUDED.contact_info,
+                        number_of_personnel = EXCLUDED.number_of_personnel,
+                        bsar_tech = EXCLUDED.bsar_tech,
+                        current_status = EXCLUDED.current_status,
+                        current_incident_id = EXCLUDED.current_incident_id,
+                        current_division_id = EXCLUDED.current_division_id
                 """, (
-                    checkin_data["unit_id"],
-                    checkin_data.get("unit_name", checkin_data["unit_id"]),
-                    checkin_data.get("unit_type", "Unknown"),
-                    checkin_data["company_officer"],
-                    self.STATUS_STAGING,
-                    checkin_data["incident_id"],
-                    self.STATUS_STAGING,
-                    checkin_data["incident_id"]
+                    self.unit_id, unit_name, unit_type, unit_leader,
+                    contact_info, number_of_personnel, bsar_tech,
+                    new_status, incident_id, division_id
                 ))
                 
-                # Log initial status
+            else:
+                # For other status updates, just update current status
                 cursor.execute("""
-                    INSERT INTO unit_status_history 
-                    (unit_id, incident_id, status, notes, user_name,
-                     location)
-                    VALUES (%s, %s, %s, %s, %s, 
-                            ST_SetSRID(ST_MakePoint(%s, %s), 4326))
-                """, (
-                    checkin_data["unit_id"],
-                    checkin_data["incident_id"],
-                    self.STATUS_STAGING,
-                    "Unit checked in",
-                    checkin_data["company_officer"],
-                    float(checkin_data["longitude"]),
-                    float(checkin_data["latitude"])
-                ))
-                
-            except Exception as status_error:
-                # If status tables don't exist yet, that's okay
-                logger.info(f"Status tracking not available yet: {status_error}")
-
-            conn.commit()
-            cursor.close()
-            self.db_manager.close()  # Properly close connection
-
-            # Update instance with new data
-            self.id = unit_db_id
-            self.incident_id = checkin_data["incident_id"]
-            self.unit_id = checkin_data["unit_id"]
-            self.company_officer = checkin_data["company_officer"]
-            self.number_of_personnel = int(checkin_data["number_of_personnel"])
-            self.bsar_tech = checkin_data.get("bsar_tech", False)
-            self.latitude = float(checkin_data["latitude"])
-            self.longitude = float(checkin_data["longitude"])
-            self.notes = checkin_data.get("notes", "")
-            self.status = "active"
-            self.checked_in_at = datetime.now()
-            self.current_status = self.STATUS_STAGING
-
-            logger.info(
-                f"Unit {self.unit_id} checked in to incident {self.incident_id}"
-            )
-
-            return {
-                "success": True,
-                "unit_id": self.unit_id,
-                "message": f"Unit {self.unit_id} checked in successfully",
-            }
-
-        except Exception as e:
-            logger.error(f"Error checking in unit: {e}")
-            return {"success": False, "error": str(e)}
-
-    def update_status(self, new_status: str) -> bool:
-        """
-        Update unit status (original method - keeping for backward compatibility)
-
-        Args:
-            new_status: New status value
-
-        Returns:
-            True if successful
-        """
-        try:
-            if not self.id:
-                return False
-
-            conn = self.db_manager.connect()
-            cursor = conn.cursor()
-
-            cursor.execute(
-                """
-                UPDATE units 
-                SET status = %s, last_updated = %s
-                WHERE id = %s
-            """,
-                (new_status, datetime.now(), self.id),
-            )
-
-            conn.commit()
-            cursor.close()
-            self.db_manager.close()  # Properly close connection
-
-            self.status = new_status
-            self.last_updated = datetime.now()
-
-            return True
-
-        except Exception as e:
-            logger.error(f"Error updating unit status: {e}")
-            return False
-
-    def update_location(self, latitude: float, longitude: float) -> bool:
-        """
-        Update unit location
-
-        Args:
-            latitude: New latitude
-            longitude: New longitude
-
-        Returns:
-            True if successful
-        """
-        try:
-            if not self.id:
-                return False
-
-            conn = self.db_manager.connect()
-            cursor = conn.cursor()
-
-            cursor.execute(
-                """
-                UPDATE units 
-                SET latitude = %s, longitude = %s, last_updated = %s
-                WHERE id = %s
-            """,
-                (latitude, longitude, datetime.now(), self.id),
-            )
-
-            conn.commit()
-            cursor.close()
-            self.db_manager.close()  # Properly close connection
-
-            self.latitude = latitude
-            self.longitude = longitude
-            self.last_updated = datetime.now()
-
-            return True
-
-        except Exception as e:
-            logger.error(f"Error updating unit location: {e}")
-            return False
-
-    # NEW STATUS MANAGEMENT METHODS - using fresh connections
-
-    def create_unit_record(self, unit_id, unit_name, unit_type, unit_leader, contact_info=None):
-        """Create new unit record in status tracking system"""
-        conn = None
-        cursor = None
-        try:
-            conn = psycopg2.connect(**DB_CONFIG)
-            cursor = conn.cursor()
-            
-            cursor.execute("""
-                INSERT INTO units (unit_id, unit_name, unit_type, unit_leader, contact_info)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (unit_id) DO UPDATE SET
-                    unit_name = EXCLUDED.unit_name,
-                    unit_type = EXCLUDED.unit_type,
-                    unit_leader = EXCLUDED.unit_leader,
-                    contact_info = EXCLUDED.contact_info
-                RETURNING id
-            """, (unit_id, unit_name, unit_type, unit_leader, contact_info))
-            
-            unit_db_id = cursor.fetchone()[0]
-            conn.commit()
-            logger.info(f"Created/updated unit record: {unit_id}")
-            return unit_db_id
-            
-        except Exception as e:
-            if conn:
-                conn.rollback()
-            logger.error(f"Failed to create unit record: {e}")
-            raise
-        finally:
-            if cursor:
-                cursor.close()
-            if conn:
-                conn.close()
-
-    def update_enhanced_status(self, incident_id, new_status, division_id=None, 
-                             percentage_complete=0, latitude=None, longitude=None, 
-                             notes=None, user_name=None):
-        """Update unit status with enhanced tracking"""
-        
-        if new_status not in self.VALID_STATUSES:
-            raise ValueError(f"Invalid status: {new_status}")
-            
-        conn = None
-        cursor = None
-        try:
-            conn = psycopg2.connect(**DB_CONFIG)
-            cursor = conn.cursor()
-            
-            # Update current status in units table
-            cursor.execute("""
-                UPDATE units 
-                SET current_status = %s, current_incident_id = %s, current_division_id = %s
-                WHERE unit_id = %s
-            """, (new_status, incident_id, division_id, self.unit_id))
+                    UPDATE units 
+                    SET current_status = %s, current_incident_id = %s, current_division_id = %s
+                    WHERE unit_id = %s
+                """, (new_status, incident_id, division_id, self.unit_id))
             
             # Log to status history
             if latitude is not None and longitude is not None:
                 cursor.execute("""
                     INSERT INTO unit_status_history 
                     (unit_id, incident_id, division_id, status, percentage_complete, 
-                     location, notes, user_name)
-                    VALUES (%s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s, %s)
+                     latitude, longitude, notes, user_name)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (self.unit_id, incident_id, division_id, new_status, percentage_complete,
-                      float(longitude), float(latitude), notes, user_name))
+                      float(latitude), float(longitude), notes, user_name))
             else:
                 cursor.execute("""
                     INSERT INTO unit_status_history 
@@ -460,20 +216,30 @@ class Unit:
             
             conn.commit()
             self.current_status = new_status
-            logger.info(f"Updated unit {self.unit_id} status to {new_status}")
+            self.current_incident_id = incident_id
+            self.current_division_id = division_id
+            
+            action = "checked in" if new_status == self.STATUS_STAGING else "status updated"
+            logger.info(f"Unit {self.unit_id} {action} to {new_status}")
+            
+            return {
+                "success": True,
+                "message": f"Unit {self.unit_id} {action} successfully",
+                "status": new_status
+            }
             
         except Exception as e:
             if conn:
                 conn.rollback()
             logger.error(f"Failed to update unit status: {e}")
-            raise
+            return {"success": False, "error": str(e)}
         finally:
             if cursor:
                 cursor.close()
             if conn:
                 conn.close()
 
-    def assign_to_division(self, incident_id, division_id):
+    def assign_to_division(self, incident_id: str, division_id: str) -> Dict[str, Any]:
         """Assign unit to a search division"""
         conn = None
         cursor = None
@@ -490,16 +256,14 @@ class Unit:
             
             conn.commit()
             
-            # Update unit status to assigned (in separate transaction)
-            self.update_enhanced_status(incident_id, self.STATUS_ASSIGNED, division_id)
-            
-            logger.info(f"Assigned unit {self.unit_id} to division {division_id}")
+            # Update unit status to assigned
+            return self.update_status(incident_id, self.STATUS_ASSIGNED, division_id)
             
         except Exception as e:
             if conn:
                 conn.rollback()
             logger.error(f"Failed to assign unit to division: {e}")
-            raise
+            return {"success": False, "error": str(e)}
         finally:
             if cursor:
                 cursor.close()
@@ -507,109 +271,25 @@ class Unit:
                 conn.close()
 
     def to_dict(self) -> Dict[str, Any]:
-        """
-        Convert unit to dictionary representation
-
-        Returns:
-            Dictionary representation of unit
-        """
-        base_dict = {
+        """Convert unit to dictionary representation"""
+        return {
             "id": self.id,
-            "incident_id": self.incident_id,
             "unit_id": self.unit_id,
-            "company_officer": self.company_officer,
+            "unit_name": self.unit_name,
+            "unit_type": self.unit_type,
+            "unit_leader": self.unit_leader,
+            "contact_info": self.contact_info,
             "number_of_personnel": self.number_of_personnel,
             "bsar_tech": self.bsar_tech,
-            "latitude": self.latitude,
-            "longitude": self.longitude,
-            "status": self.status,
-            "checked_in_at": (
-                self.checked_in_at.isoformat() if self.checked_in_at else None
-            ),
-            "last_updated": (
-                self.last_updated.isoformat() if self.last_updated else None
-            ),
-            "notes": self.notes,
+            "current_status": self.current_status,
+            "current_incident_id": self.current_incident_id,
+            "current_division_id": self.current_division_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None
         }
-        
-        # Add enhanced status fields if available
-        if hasattr(self, 'current_status'):
-            base_dict.update({
-                "unit_name": self.unit_name,
-                "unit_type": self.unit_type, 
-                "unit_leader": self.unit_leader,
-                "current_status": self.current_status,
-                "current_division_id": self.current_division_id
-            })
-            
-        return base_dict
 
     @staticmethod
-    def get_units_for_incident(incident_id: str, db_manager) -> List[Dict[str, Any]]:
-        """
-        Get all units for a specific incident
-
-        Args:
-            incident_id: Incident ID
-            db_manager: Database manager instance
-
-        Returns:
-            List of unit dictionaries
-        """
-        conn = None
-        cursor = None
-        try:
-            conn = db_manager.connect()
-            cursor = conn.cursor()
-
-            cursor.execute(
-                """
-                SELECT 
-                    id, incident_id, unit_id, company_officer, number_of_personnel, 
-                    bsar_tech, latitude, longitude, status, checked_in_at, 
-                    last_updated, notes
-                FROM units 
-                WHERE incident_id = %s 
-                ORDER BY checked_in_at DESC
-            """,
-                (incident_id,),
-            )
-
-            units = []
-            for row in cursor.fetchall():
-                unit_data = {
-                    "id": row[0],
-                    "incident_id": row[1],
-                    "unit_id": row[2],
-                    "company_officer": row[3],
-                    "number_of_personnel": row[4],
-                    "bsar_tech": row[5],
-                    "latitude": float(row[6]) if row[6] else None,
-                    "longitude": float(row[7]) if row[7] else None,
-                    "status": row[8],
-                    "checked_in_at": row[9],
-                    "last_updated": row[10],
-                    "notes": row[11],
-                }
-
-                # Create Unit instance and convert to dict
-                unit = Unit(db_manager, unit_data)
-                units.append(unit.to_dict())
-
-            return units
-
-        except Exception as e:
-            logger.error(f"Error retrieving units for incident {incident_id}: {e}")
-            return []
-        finally:
-            if cursor:
-                cursor.close()
-            if conn:
-                db_manager.close()
-
-    @staticmethod
-    def get_units_by_incident(incident_id):
-        """Get all units for an incident using enhanced status tracking"""
+    def get_units_by_incident(incident_id: str) -> List[Dict[str, Any]]:
+        """Get all units for an incident"""
         conn = None
         cursor = None
         try:
@@ -636,7 +316,7 @@ class Unit:
                 conn.close()
 
     @staticmethod
-    def get_unit_status_history(unit_id, incident_id=None):
+    def get_unit_status_history(unit_id: str, incident_id: str = None) -> List[Dict[str, Any]]:
         """Get status history for a unit"""
         conn = None
         cursor = None
@@ -673,56 +353,21 @@ class Unit:
                 conn.close()
 
     @staticmethod
-    def get_unit_by_id(unit_id: str, incident_id: str, db_manager) -> Optional["Unit"]:
-        """
-        Get specific unit by ID and incident
-
-        Args:
-            unit_id: Unit ID
-            incident_id: Incident ID
-            db_manager: Database manager instance
-
-        Returns:
-            Unit instance or None
-        """
+    def get_unit_by_id(unit_id: str) -> Optional["Unit"]:
+        """Get specific unit by ID"""
         conn = None
         cursor = None
         try:
-            conn = db_manager.connect()
-            cursor = conn.cursor()
+            conn = psycopg2.connect(**DB_CONFIG)
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-            cursor.execute(
-                """
-                SELECT 
-                    id, incident_id, unit_id, company_officer, number_of_personnel, 
-                    bsar_tech, latitude, longitude, status, checked_in_at, 
-                    last_updated, notes
-                FROM units 
-                WHERE unit_id = %s AND incident_id = %s
-            """,
-                (unit_id, incident_id),
-            )
+            cursor.execute("""
+                SELECT * FROM units WHERE unit_id = %s
+            """, (unit_id,))
 
             row = cursor.fetchone()
-
             if row:
-                unit_data = {
-                    "id": row[0],
-                    "incident_id": row[1],
-                    "unit_id": row[2],
-                    "company_officer": row[3],
-                    "number_of_personnel": row[4],
-                    "bsar_tech": row[5],
-                    "latitude": row[6],
-                    "longitude": row[7],
-                    "status": row[8],
-                    "checked_in_at": row[9],
-                    "last_updated": row[10],
-                    "notes": row[11],
-                }
-
-                return Unit(db_manager, unit_data)
-
+                return Unit(dict(row))
             return None
 
         except Exception as e:
@@ -732,32 +377,20 @@ class Unit:
             if cursor:
                 cursor.close()
             if conn:
-                db_manager.close()
+                conn.close()
 
     @staticmethod
-    def get_unit_count_for_incident(incident_id: str, db_manager) -> int:
-        """
-        Get count of units for incident
-
-        Args:
-            incident_id: Incident ID
-            db_manager: Database manager instance
-
-        Returns:
-            Number of units checked in
-        """
+    def get_unit_count_for_incident(incident_id: str) -> int:
+        """Get count of units for incident"""
         conn = None
         cursor = None
         try:
-            conn = db_manager.connect()
+            conn = psycopg2.connect(**DB_CONFIG)
             cursor = conn.cursor()
 
-            cursor.execute(
-                """
-                SELECT COUNT(*) FROM units WHERE incident_id = %s
-            """,
-                (incident_id,),
-            )
+            cursor.execute("""
+                SELECT COUNT(*) FROM units WHERE current_incident_id = %s
+            """, (incident_id,))
 
             count = cursor.fetchone()[0]
             return count
@@ -769,4 +402,4 @@ class Unit:
             if cursor:
                 cursor.close()
             if conn:
-                db_manager.close()
+                conn.close()
