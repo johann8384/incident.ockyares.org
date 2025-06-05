@@ -159,7 +159,7 @@ class Unit:
 
             result = cursor.fetchone()
             cursor.close()
-            conn.close()
+            self.db_manager.close()  # Properly close connection
 
             return result is not None
 
@@ -264,7 +264,7 @@ class Unit:
 
             conn.commit()
             cursor.close()
-            conn.close()
+            self.db_manager.close()  # Properly close connection
 
             # Update instance with new data
             self.id = unit_db_id
@@ -322,7 +322,7 @@ class Unit:
 
             conn.commit()
             cursor.close()
-            conn.close()
+            self.db_manager.close()  # Properly close connection
 
             self.status = new_status
             self.last_updated = datetime.now()
@@ -362,7 +362,7 @@ class Unit:
 
             conn.commit()
             cursor.close()
-            conn.close()
+            self.db_manager.close()  # Properly close connection
 
             self.latitude = latitude
             self.longitude = longitude
@@ -374,22 +374,16 @@ class Unit:
             logger.error(f"Error updating unit location: {e}")
             return False
 
-    # NEW STATUS MANAGEMENT METHODS
-
-    def connect_status_db(self):
-        """Get database connection for status functionality"""
-        try:
-            return psycopg2.connect(**DB_CONFIG)
-        except Exception as e:
-            logger.error(f"Status database connection failed: {e}")
-            raise
+    # NEW STATUS MANAGEMENT METHODS - using fresh connections
 
     def create_unit_record(self, unit_id, unit_name, unit_type, unit_leader, contact_info=None):
         """Create new unit record in status tracking system"""
-        conn = self.connect_status_db()
-        cursor = conn.cursor()
-        
+        conn = None
+        cursor = None
         try:
+            conn = psycopg2.connect(**DB_CONFIG)
+            cursor = conn.cursor()
+            
             cursor.execute("""
                 INSERT INTO units (unit_id, unit_name, unit_type, unit_leader, contact_info)
                 VALUES (%s, %s, %s, %s, %s)
@@ -407,12 +401,15 @@ class Unit:
             return unit_db_id
             
         except Exception as e:
-            conn.rollback()
+            if conn:
+                conn.rollback()
             logger.error(f"Failed to create unit record: {e}")
             raise
         finally:
-            cursor.close()
-            conn.close()
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
 
     def update_enhanced_status(self, incident_id, new_status, division_id=None, 
                              percentage_complete=0, latitude=None, longitude=None, 
@@ -422,10 +419,12 @@ class Unit:
         if new_status not in self.VALID_STATUSES:
             raise ValueError(f"Invalid status: {new_status}")
             
-        conn = self.connect_status_db()
-        cursor = conn.cursor()
-        
+        conn = None
+        cursor = None
         try:
+            conn = psycopg2.connect(**DB_CONFIG)
+            cursor = conn.cursor()
+            
             # Update current status in units table
             cursor.execute("""
                 UPDATE units 
@@ -464,19 +463,24 @@ class Unit:
             logger.info(f"Updated unit {self.unit_id} status to {new_status}")
             
         except Exception as e:
-            conn.rollback()
+            if conn:
+                conn.rollback()
             logger.error(f"Failed to update unit status: {e}")
             raise
         finally:
-            cursor.close()
-            conn.close()
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
 
     def assign_to_division(self, incident_id, division_id):
         """Assign unit to a search division"""
-        conn = self.connect_status_db()
-        cursor = conn.cursor()
-        
+        conn = None
+        cursor = None
         try:
+            conn = psycopg2.connect(**DB_CONFIG)
+            cursor = conn.cursor()
+            
             # Update division assignment
             cursor.execute("""
                 UPDATE search_divisions 
@@ -484,19 +488,23 @@ class Unit:
                 WHERE division_id = %s AND incident_id = %s
             """, (self.unit_id, division_id, incident_id))
             
-            # Update unit status to assigned
+            conn.commit()
+            
+            # Update unit status to assigned (in separate transaction)
             self.update_enhanced_status(incident_id, self.STATUS_ASSIGNED, division_id)
             
-            conn.commit()
             logger.info(f"Assigned unit {self.unit_id} to division {division_id}")
             
         except Exception as e:
-            conn.rollback()
+            if conn:
+                conn.rollback()
             logger.error(f"Failed to assign unit to division: {e}")
             raise
         finally:
-            cursor.close()
-            conn.close()
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
 
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -548,6 +556,8 @@ class Unit:
         Returns:
             List of unit dictionaries
         """
+        conn = None
+        cursor = None
         try:
             conn = db_manager.connect()
             cursor = conn.cursor()
@@ -586,22 +596,26 @@ class Unit:
                 unit = Unit(db_manager, unit_data)
                 units.append(unit.to_dict())
 
-            cursor.close()
-            conn.close()
-
             return units
 
         except Exception as e:
             logger.error(f"Error retrieving units for incident {incident_id}: {e}")
             return []
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                db_manager.close()
 
     @staticmethod
     def get_units_by_incident(incident_id):
         """Get all units for an incident using enhanced status tracking"""
-        conn = psycopg2.connect(**DB_CONFIG)
-        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        
+        conn = None
+        cursor = None
         try:
+            conn = psycopg2.connect(**DB_CONFIG)
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            
             cursor.execute("""
                 SELECT u.*, sd.division_name 
                 FROM units u
@@ -612,17 +626,24 @@ class Unit:
             
             return cursor.fetchall()
             
+        except Exception as e:
+            logger.error(f"Error getting units by incident: {e}")
+            return []
         finally:
-            cursor.close()
-            conn.close()
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
 
     @staticmethod
     def get_unit_status_history(unit_id, incident_id=None):
         """Get status history for a unit"""
-        conn = psycopg2.connect(**DB_CONFIG)
-        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        
+        conn = None
+        cursor = None
         try:
+            conn = psycopg2.connect(**DB_CONFIG)
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            
             if incident_id:
                 cursor.execute("""
                     SELECT ush.*, sd.division_name
@@ -642,9 +663,14 @@ class Unit:
             
             return cursor.fetchall()
             
+        except Exception as e:
+            logger.error(f"Error getting unit status history: {e}")
+            return []
         finally:
-            cursor.close()
-            conn.close()
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
 
     @staticmethod
     def get_unit_by_id(unit_id: str, incident_id: str, db_manager) -> Optional["Unit"]:
@@ -659,6 +685,8 @@ class Unit:
         Returns:
             Unit instance or None
         """
+        conn = None
+        cursor = None
         try:
             conn = db_manager.connect()
             cursor = conn.cursor()
@@ -676,8 +704,6 @@ class Unit:
             )
 
             row = cursor.fetchone()
-            cursor.close()
-            conn.close()
 
             if row:
                 unit_data = {
@@ -702,6 +728,11 @@ class Unit:
         except Exception as e:
             logger.error(f"Error retrieving unit {unit_id}: {e}")
             return None
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                db_manager.close()
 
     @staticmethod
     def get_unit_count_for_incident(incident_id: str, db_manager) -> int:
@@ -715,6 +746,8 @@ class Unit:
         Returns:
             Number of units checked in
         """
+        conn = None
+        cursor = None
         try:
             conn = db_manager.connect()
             cursor = conn.cursor()
@@ -727,11 +760,13 @@ class Unit:
             )
 
             count = cursor.fetchone()[0]
-            cursor.close()
-            conn.close()
-
             return count
 
         except Exception as e:
             logger.error(f"Error getting unit count for incident {incident_id}: {e}")
             return 0
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                db_manager.close()
