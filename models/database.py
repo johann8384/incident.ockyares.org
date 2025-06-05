@@ -1,7 +1,8 @@
-import psycopg2
-import psycopg2.extras
 import os
 from typing import Optional
+
+import psycopg2
+import psycopg2.extras
 
 
 class DatabaseManager:

@@ -1,10 +1,11 @@
-from flask import Flask, render_template, request, jsonify
-from dotenv import load_dotenv
 import os
 
+from dotenv import load_dotenv
+from flask import Flask, jsonify, render_template, request
+
 from models.database import DatabaseManager
-from models.incident import Incident
 from models.hospital import Hospital
+from models.incident import Incident
 from models.unit import Unit
 from services.geocoding import GeocodingService
 
@@ -42,37 +43,36 @@ def reverse_geocode():
     """Reverse geocode coordinates to address using GeocodingService"""
     try:
         data = request.get_json()
-        
+
         latitude = data.get("latitude")
         longitude = data.get("longitude")
-        
+
         if latitude is None or longitude is None:
             return jsonify({"error": "Latitude and longitude are required"}), 400
-        
+
         # Convert to float
         try:
             latitude = float(latitude)
             longitude = float(longitude)
         except (ValueError, TypeError):
             return jsonify({"error": "Invalid latitude or longitude values"}), 400
-        
+
         # Use GeocodingService instead of direct API call
         result = geocoding_service.reverse_geocode(latitude, longitude)
-        
-        if result['success']:
-            return jsonify({
-                "success": True,
-                "address": result['address'],
-                "formatted_address": result.get('formatted_address'),
-                "address_components": result.get('address_components'),
-                "data": result.get('raw_data')
-            })
+
+        if result["success"]:
+            return jsonify(
+                {
+                    "success": True,
+                    "address": result["address"],
+                    "formatted_address": result.get("formatted_address"),
+                    "address_components": result.get("address_components"),
+                    "data": result.get("raw_data"),
+                }
+            )
         else:
-            return jsonify({
-                "success": False,
-                "error": result['error']
-            }), 500
-            
+            return jsonify({"success": False, "error": result["error"]}), 500
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -82,26 +82,25 @@ def forward_geocode():
     """Forward geocode address to coordinates using GeocodingService"""
     try:
         data = request.get_json()
-        
+
         address = data.get("address")
         if not address:
             return jsonify({"error": "Address is required"}), 400
-        
+
         # Use GeocodingService for forward geocoding
         result = geocoding_service.forward_geocode(address)
-        
-        if result['success']:
-            return jsonify({
-                "success": True,
-                "results": result['results'],
-                "count": result['count']
-            })
+
+        if result["success"]:
+            return jsonify(
+                {
+                    "success": True,
+                    "results": result["results"],
+                    "count": result["count"],
+                }
+            )
         else:
-            return jsonify({
-                "success": False,
-                "error": result['error']
-            }), 500
-            
+            return jsonify({"success": False, "error": result["error"]}), 500
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -111,42 +110,47 @@ def search_hospitals():
     """Search for hospitals near a location using server-side API call"""
     try:
         data = request.get_json()
-        
+
         latitude = data.get("latitude")
         longitude = data.get("longitude")
-        
+
         if latitude is None or longitude is None:
             return jsonify({"error": "Latitude and longitude are required"}), 400
-        
+
         # Convert to float
         try:
             latitude = float(latitude)
             longitude = float(longitude)
         except (ValueError, TypeError):
             return jsonify({"error": "Invalid latitude or longitude values"}), 400
-        
+
         # Get hospital data using the hospital model
         hospital_manager = Hospital(db_manager)
         result = hospital_manager.get_hospitals_for_location(
-            latitude=latitude,
-            longitude=longitude,
-            use_cache=True
+            latitude=latitude, longitude=longitude, use_cache=True
         )
-        
-        if result['success']:
-            return jsonify({
-                "success": True,
-                "hospitals": result['hospitals'],
-                "total_found": result['total_found'],
-                "source": result['source']
-            })
+
+        if result["success"]:
+            return jsonify(
+                {
+                    "success": True,
+                    "hospitals": result["hospitals"],
+                    "total_found": result["total_found"],
+                    "source": result["source"],
+                }
+            )
         else:
-            return jsonify({
-                "success": False,
-                "error": result.get('error', 'Unknown error'),
-                "hospitals": {}
-            }), 500
-            
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": result.get("error", "Unknown error"),
+                        "hospitals": {},
+                    }
+                ),
+                500,
+            )
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -156,27 +160,34 @@ def generate_divisions_preview():
     """Generate search divisions for preview (without saving to database)"""
     try:
         data = request.get_json()
-        
+
         # Validate required fields
         if not data.get("coordinates") or len(data.get("coordinates", [])) < 3:
-            return jsonify({"error": "Search area coordinates required (minimum 3 points)"}), 400
-            
+            return (
+                jsonify(
+                    {"error": "Search area coordinates required (minimum 3 points)"}
+                ),
+                400,
+            )
+
         # Create temporary incident instance for division generation
         incident = Incident(db_manager)
-        
+
         # Generate divisions without saving
         divisions = incident.generate_divisions_preview(
             search_area_coordinates=data["coordinates"],
-            area_size_m2=data.get("area_size_m2", 40000)
+            area_size_m2=data.get("area_size_m2", 40000),
         )
-        
-        return jsonify({
-            "success": True,
-            "divisions": divisions,
-            "count": len(divisions),
-            "message": f"Generated {len(divisions)} search divisions for preview"
-        })
-        
+
+        return jsonify(
+            {
+                "success": True,
+                "divisions": divisions,
+                "count": len(divisions),
+                "message": f"Generated {len(divisions)} search divisions for preview",
+            }
+        )
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -186,35 +197,37 @@ def unit_checkin_api():
     """Check in a unit to an incident using Unit model"""
     try:
         data = request.get_json()
-        
+
         # Check if incident exists first
-        incident = Incident.get_incident_by_id(data.get('incident_id'), db_manager)
+        incident = Incident.get_incident_by_id(data.get("incident_id"), db_manager)
         if not incident:
             return jsonify({"error": "Incident not found"}), 404
-        
+
         # Use Unit model for check-in process
         unit = Unit(db_manager)
         result = unit.checkin_to_incident(data)
-        
-        if result['success']:
-            return jsonify({
-                "success": True,
-                "unit_id": result['unit_id'],
-                "message": result['message']
-            })
+
+        if result["success"]:
+            return jsonify(
+                {
+                    "success": True,
+                    "unit_id": result["unit_id"],
+                    "message": result["message"],
+                }
+            )
         else:
             # Determine appropriate HTTP status code
-            if "not found" in result['error'].lower():
+            if "not found" in result["error"].lower():
                 status_code = 404
-            elif "already checked in" in result['error'].lower():
+            elif "already checked in" in result["error"].lower():
                 status_code = 400
-            elif "required" in result['error'].lower():
+            elif "required" in result["error"].lower():
                 status_code = 400
             else:
                 status_code = 500
-                
-            return jsonify({"error": result['error']}), status_code
-        
+
+            return jsonify({"error": result["error"]}), status_code
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -225,13 +238,9 @@ def get_incident_units(incident_id):
     try:
         # Use Unit model static method
         units = Unit.get_units_for_incident(incident_id, db_manager)
-        
-        return jsonify({
-            "success": True,
-            "units": units,
-            "count": len(units)
-        })
-        
+
+        return jsonify({"success": True, "units": units, "count": len(units)})
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -257,7 +266,7 @@ def create_incident():
             address=data.get("address"),
             hospital_data=data.get("hospital_data"),
             search_area_coordinates=data.get("search_area_coordinates"),
-            divisions=data.get("divisions")  # Save divisions if provided
+            divisions=data.get("divisions"),  # Save divisions if provided
         )
 
         return jsonify(
@@ -279,13 +288,10 @@ def get_incident(incident_id):
         incident = Incident.get_incident_by_id(incident_id, db_manager)
         if not incident:
             return jsonify({"error": "Incident not found"}), 404
-        
+
         incident_data = incident.get_incident_data()
-        return jsonify({
-            "success": True,
-            "incident": incident_data
-        })
-        
+        return jsonify({"success": True, "incident": incident_data})
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -303,8 +309,7 @@ def set_incident_location(incident_id):
         incident.incident_id = incident_id
 
         success = incident.set_location(
-            latitude=float(data["latitude"]), 
-            longitude=float(data["longitude"])
+            latitude=float(data["latitude"]), longitude=float(data["longitude"])
         )
 
         if success:
@@ -353,23 +358,22 @@ def save_hospital_data(incident_id):
     """Save hospital data for incident"""
     try:
         data = request.get_json()
-        
+
         if not data.get("hospital_data"):
             return jsonify({"error": "Hospital data is required"}), 400
-        
+
         incident = Incident(db_manager)
         incident.incident_id = incident_id
-        
+
         success = incident.save_hospital_data(data["hospital_data"])
-        
+
         if success:
-            return jsonify({
-                "success": True,
-                "message": "Hospital data saved successfully"
-            })
+            return jsonify(
+                {"success": True, "message": "Hospital data saved successfully"}
+            )
         else:
             return jsonify({"error": "Failed to save hospital data"}), 500
-            
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -379,21 +383,23 @@ def save_divisions(incident_id):
     """Save search divisions for existing incident"""
     try:
         data = request.get_json()
-        
+
         if not data.get("divisions"):
             return jsonify({"error": "Divisions data is required"}), 400
-            
+
         incident = Incident.get_incident_by_id(incident_id, db_manager)
         if not incident:
             return jsonify({"error": "Incident not found"}), 404
 
         success = incident.save_divisions(data["divisions"])
-        
+
         if success:
-            return jsonify({
-                "success": True,
-                "message": f"Saved {len(data['divisions'])} divisions successfully"
-            })
+            return jsonify(
+                {
+                    "success": True,
+                    "message": f"Saved {len(data['divisions'])} divisions successfully",
+                }
+            )
         else:
             return jsonify({"error": "Failed to save divisions"}), 500
 
@@ -407,15 +413,13 @@ def get_divisions(incident_id):
     try:
         incident = Incident(db_manager)
         incident.incident_id = incident_id
-        
+
         divisions = incident.get_divisions()
-        
-        return jsonify({
-            "success": True,
-            "divisions": divisions,
-            "count": len(divisions)
-        })
-        
+
+        return jsonify(
+            {"success": True, "divisions": divisions, "count": len(divisions)}
+        )
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -425,26 +429,28 @@ def update_unit_status(incident_id, unit_id):
     """Update unit status"""
     try:
         data = request.get_json()
-        
+
         new_status = data.get("status")
         if not new_status:
             return jsonify({"error": "Status is required"}), 400
-        
+
         # Get unit and update status
         unit = Unit.get_unit_by_id(unit_id, incident_id, db_manager)
         if not unit:
             return jsonify({"error": "Unit not found"}), 404
-        
+
         success = unit.update_status(new_status)
-        
+
         if success:
-            return jsonify({
-                "success": True,
-                "message": f"Unit {unit_id} status updated to {new_status}"
-            })
+            return jsonify(
+                {
+                    "success": True,
+                    "message": f"Unit {unit_id} status updated to {new_status}",
+                }
+            )
         else:
             return jsonify({"error": "Failed to update unit status"}), 500
-            
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -454,34 +460,33 @@ def update_unit_location(incident_id, unit_id):
     """Update unit location"""
     try:
         data = request.get_json()
-        
+
         latitude = data.get("latitude")
         longitude = data.get("longitude")
-        
+
         if latitude is None or longitude is None:
             return jsonify({"error": "Latitude and longitude are required"}), 400
-        
+
         try:
             latitude = float(latitude)
             longitude = float(longitude)
         except (ValueError, TypeError):
             return jsonify({"error": "Invalid coordinate values"}), 400
-        
+
         # Get unit and update location
         unit = Unit.get_unit_by_id(unit_id, incident_id, db_manager)
         if not unit:
             return jsonify({"error": "Unit not found"}), 404
-        
+
         success = unit.update_location(latitude, longitude)
-        
+
         if success:
-            return jsonify({
-                "success": True,
-                "message": f"Unit {unit_id} location updated"
-            })
+            return jsonify(
+                {"success": True, "message": f"Unit {unit_id} location updated"}
+            )
         else:
             return jsonify({"error": "Failed to update unit location"}), 500
-            
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

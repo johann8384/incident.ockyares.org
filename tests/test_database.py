@@ -1,4 +1,5 @@
 import pytest
+
 from models.database import DatabaseManager
 
 

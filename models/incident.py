@@ -1,10 +1,12 @@
-import uuid
-import requests
-import os
 import json
+import os
+import uuid
 from datetime import datetime
-from typing import List, Tuple, Optional, Dict
+from typing import Dict, List, Optional, Tuple
+
+import requests
 from shapely.geometry import Point, Polygon
+
 from .database import DatabaseManager
 from .hospital import Hospital
 
@@ -28,16 +30,16 @@ class Incident:
         self.team_size = int(os.getenv("TEAM_SIZE", 4))
 
     def create_incident(
-        self, 
-        name: str, 
-        incident_type: str, 
+        self,
+        name: str,
+        incident_type: str,
         description: str = "",
         latitude: float = None,
         longitude: float = None,
         address: str = None,
         hospital_data: Dict = None,
         search_area_coordinates: List = None,
-        divisions: List[Dict] = None
+        divisions: List[Dict] = None,
     ) -> str:
         """Create a new incident with full data"""
         self.incident_id = (
@@ -63,12 +65,12 @@ class Incident:
         """
 
         params = (
-            self.incident_id, 
-            self.name, 
-            self.incident_type, 
+            self.incident_id,
+            self.name,
+            self.incident_type,
             self.description,
             f"POINT({longitude} {latitude})" if self.incident_location else None,
-            self.address
+            self.address,
         )
 
         result = self.db.execute_query(query, params, fetch=True)
@@ -79,27 +81,23 @@ class Incident:
             coords = search_area_coordinates.copy()
             if coords[0] != coords[-1]:
                 coords.append(coords[0])
-            
+
             # Convert lng,lat to lat,lng and create WKT
             coords_str = ", ".join([f"{coord[0]} {coord[1]}" for coord in coords])
             search_area_wkt = f"POLYGON(({coords_str}))"
-            
+
             update_query = """
             UPDATE incidents 
             SET search_area = ST_GeomFromText(%s, 4326)
             WHERE incident_id = %s
             """
-            
-            self.db.execute_query(update_query, (
-                search_area_wkt, 
-                self.incident_id
-            ))
+
+            self.db.execute_query(update_query, (search_area_wkt, self.incident_id))
 
         # Save hospital data if provided
         if self.hospital_data:
             self.hospital_manager.save_incident_hospitals(
-                self.incident_id, 
-                self.hospital_data
+                self.incident_id, self.hospital_data
             )
 
         # Save divisions if provided
@@ -108,7 +106,9 @@ class Incident:
 
         return self.incident_id
 
-    def generate_divisions_preview(self, search_area_coordinates: List, area_size_m2: int = 40000) -> List[Dict]:
+    def generate_divisions_preview(
+        self, search_area_coordinates: List, area_size_m2: int = 40000
+    ) -> List[Dict]:
         """Generate divisions for preview without saving to database"""
         try:
             if not search_area_coordinates or len(search_area_coordinates) < 3:
@@ -118,14 +118,14 @@ class Incident:
             # search_area_coordinates are in lng,lat format
             polygon_coords = [(coord[0], coord[1]) for coord in search_area_coordinates]
             polygon = Polygon(polygon_coords)
-            
+
             # Calculate area and number of divisions
             area_m2 = self._calculate_area_m2(polygon)
             num_divisions = max(1, int(area_m2 / area_size_m2))
 
             # Generate divisions
             divisions = self._create_grid_divisions_preview(polygon, num_divisions)
-            
+
             return divisions
 
         except Exception as e:
@@ -138,22 +138,28 @@ class Incident:
             for division in divisions:
                 # Extract coordinates from division data
                 coordinates = None
-                if 'coordinates' in division:
-                    coordinates = division['coordinates']
-                elif 'geom' in division and division['geom']:
+                if "coordinates" in division:
+                    coordinates = division["coordinates"]
+                elif "geom" in division and division["geom"]:
                     # Parse geometry if it's in different format
-                    geom_data = json.loads(division['geom']) if isinstance(division['geom'], str) else division['geom']
-                    if 'coordinates' in geom_data:
-                        coordinates = geom_data['coordinates'][0]  # Get outer ring
-                
+                    geom_data = (
+                        json.loads(division["geom"])
+                        if isinstance(division["geom"], str)
+                        else division["geom"]
+                    )
+                    if "coordinates" in geom_data:
+                        coordinates = geom_data["coordinates"][0]  # Get outer ring
+
                 if coordinates:
                     # Ensure polygon is closed
                     coords = coordinates.copy()
                     if coords[0] != coords[-1]:
                         coords.append(coords[0])
-                    
+
                     # Convert coordinates to WKT
-                    coords_str = ", ".join([f"{coord[0]} {coord[1]}" for coord in coords])
+                    coords_str = ", ".join(
+                        [f"{coord[0]} {coord[1]}" for coord in coords]
+                    )
                     polygon_wkt = f"POLYGON(({coords_str}))"
 
                     query = """
@@ -174,11 +180,11 @@ class Incident:
                         division.get("priority", 1),
                         division.get("search_type", "primary"),
                         division.get("estimated_duration", "2 hours"),
-                        division.get("assigned_team")
+                        division.get("assigned_team"),
                     )
 
                     self.db.execute_query(query, params)
-            
+
             return True
 
         except Exception as e:
@@ -249,8 +255,7 @@ class Incident:
         try:
             self.hospital_data = hospital_data
             return self.hospital_manager.save_incident_hospitals(
-                self.incident_id, 
-                hospital_data
+                self.incident_id, hospital_data
             )
         except Exception as e:
             print(f"Failed to save hospital data: {e}")
@@ -270,26 +275,28 @@ class Incident:
             FROM incidents
             WHERE incident_id = %s
             """
-            
+
             result = self.db.execute_query(query, (self.incident_id,), fetch=True)
-            
+
             if not result:
                 return {}
-            
+
             incident = dict(result[0])
-            
+
             # Get hospital data
-            hospital_data = self.hospital_manager.get_incident_hospitals(self.incident_id)
+            hospital_data = self.hospital_manager.get_incident_hospitals(
+                self.incident_id
+            )
             if hospital_data:
-                incident['hospitals'] = hospital_data
-            
+                incident["hospitals"] = hospital_data
+
             # Get divisions
             divisions = self.get_divisions()
             if divisions:
-                incident['divisions'] = divisions
-            
+                incident["divisions"] = divisions
+
             return incident
-            
+
         except Exception as e:
             print(f"Failed to get incident data: {e}")
             return {}
@@ -307,10 +314,10 @@ class Incident:
             WHERE incident_id = %s
             ORDER BY division_name
             """
-            
+
             result = self.db.execute_query(query, (self.incident_id,), fetch=True)
             return [dict(row) for row in result] if result else []
-            
+
         except Exception as e:
             print(f"Failed to get divisions: {e}")
             return []
@@ -323,7 +330,7 @@ class Incident:
         try:
             # Clear existing divisions
             self._clear_existing_divisions()
-            
+
             # Calculate approximate number of divisions needed
             area_m2 = self._calculate_area_m2(self.search_area)
             num_divisions = max(1, int(area_m2 / self.search_area_size_m2))
@@ -390,7 +397,9 @@ class Incident:
 
         return abs(area_m2)
 
-    def _create_grid_divisions_preview(self, polygon: Polygon, num_divisions: int) -> List[Dict]:
+    def _create_grid_divisions_preview(
+        self, polygon: Polygon, num_divisions: int
+    ) -> List[Dict]:
         """Create grid-based divisions for preview"""
         divisions = []
         bounds = polygon.bounds
@@ -428,7 +437,7 @@ class Incident:
                     # Clip to search area with safety checks
                     if polygon.intersects(cell):
                         clipped = polygon.intersection(cell)
-                        
+
                         # Handle different geometry types returned by intersection
                         if hasattr(clipped, "area") and clipped.area > 0:
                             # Only process if it's a valid polygon-like geometry
@@ -436,7 +445,10 @@ class Incident:
                                 coords = list(clipped.exterior.coords)
                             elif hasattr(clipped, "geoms"):
                                 # MultiPolygon case - take the largest polygon
-                                largest = max(clipped.geoms, key=lambda g: g.area if hasattr(g, 'area') else 0)
+                                largest = max(
+                                    clipped.geoms,
+                                    key=lambda g: g.area if hasattr(g, "area") else 0,
+                                )
                                 if hasattr(largest, "exterior"):
                                     coords = list(largest.exterior.coords)
                                     clipped = largest
@@ -444,26 +456,38 @@ class Incident:
                                     continue
                             else:
                                 # Fallback to grid cell
-                                coords = [(x1, y1), (x2, y1), (x2, y2), (x1, y2), (x1, y1)]
+                                coords = [
+                                    (x1, y1),
+                                    (x2, y1),
+                                    (x2, y2),
+                                    (x1, y2),
+                                    (x1, y1),
+                                ]
                                 clipped = cell
 
-                            division_letter = chr(65 + division_counter)  # A, B, C, etc.
+                            division_letter = chr(
+                                65 + division_counter
+                            )  # A, B, C, etc.
                             division_name = f"Division {division_letter}"
                             division_id = f"DIV-{division_letter}"
 
-                            divisions.append({
-                                "division_name": division_name,
-                                "division_id": division_id,
-                                "coordinates": coords,
-                                "estimated_area_m2": self._calculate_area_m2(clipped),
-                                "status": "unassigned",
-                                "priority": 1,
-                                "search_type": "primary",
-                                "estimated_duration": "2 hours"
-                            })
+                            divisions.append(
+                                {
+                                    "division_name": division_name,
+                                    "division_id": division_id,
+                                    "coordinates": coords,
+                                    "estimated_area_m2": self._calculate_area_m2(
+                                        clipped
+                                    ),
+                                    "status": "unassigned",
+                                    "priority": 1,
+                                    "search_type": "primary",
+                                    "estimated_duration": "2 hours",
+                                }
+                            )
 
                             division_counter += 1
-                
+
                 except Exception as e:
                     print(f"Error processing grid cell {row},{col}: {e}")
                     # Skip this cell and continue
@@ -514,7 +538,7 @@ class Incident:
                             "status": "unassigned",
                             "priority": 1,
                             "search_type": "primary",
-                            "estimated_duration": "2 hours"
+                            "estimated_duration": "2 hours",
                         }
                     )
 
@@ -547,36 +571,38 @@ class Incident:
                     division.get("status", "unassigned"),
                     division.get("priority", 1),
                     division.get("search_type", "primary"),
-                    division.get("estimated_duration", "2 hours")
+                    division.get("estimated_duration", "2 hours"),
                 )
 
                 self.db.execute_query(query, params)
 
     @classmethod
-    def get_incident_by_id(cls, incident_id: str, db_manager: DatabaseManager = None) -> Optional['Incident']:
+    def get_incident_by_id(
+        cls, incident_id: str, db_manager: DatabaseManager = None
+    ) -> Optional["Incident"]:
         """Load an existing incident by ID"""
         try:
             incident = cls(db_manager)
             incident.incident_id = incident_id
-            
+
             # Get incident data
             data = incident.get_incident_data()
             if not data:
                 return None
-            
+
             # Populate incident object
-            incident.name = data.get('name')
-            incident.incident_type = data.get('incident_type')
-            incident.description = data.get('description')
-            incident.address = data.get('address')
-            
-            if data.get('longitude') and data.get('latitude'):
-                incident.incident_location = Point(data['longitude'], data['latitude'])
-            
-            incident.hospital_data = data.get('hospitals')
-            
+            incident.name = data.get("name")
+            incident.incident_type = data.get("incident_type")
+            incident.description = data.get("description")
+            incident.address = data.get("address")
+
+            if data.get("longitude") and data.get("latitude"):
+                incident.incident_location = Point(data["longitude"], data["latitude"])
+
+            incident.hospital_data = data.get("hospitals")
+
             return incident
-            
+
         except Exception as e:
             print(f"Failed to load incident: {e}")
             return None

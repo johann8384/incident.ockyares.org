@@ -1,8 +1,9 @@
-import pytest
 import os
-import psycopg2
-from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 import sys
+
+import psycopg2
+import pytest
+from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

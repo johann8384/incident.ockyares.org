@@ -1,7 +1,9 @@
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
-from models.incident import Incident
 from shapely.geometry import Point, Polygon
+
+from models.incident import Incident
 
 
 class TestIncident:
