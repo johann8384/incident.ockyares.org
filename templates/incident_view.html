@@ -13,8 +13,9 @@
     <style>
         /* Minimal overrides - only what's absolutely necessary */
         #map { 
-            height: 600px; 
+            height: 500px; 
             border-radius: 0.375rem; /* Bootstrap border-radius */
+            min-height: 400px;
         }
         .legend-color { 
             width: 20px; 
@@ -40,6 +41,11 @@
         }
         .unit-status-offline {
             color: #6c757d;
+        }
+        @media (min-width: 992px) {
+            #map {
+                height: 600px;
+            }
         }
     </style>
 </head>
@@ -319,6 +325,11 @@
             
             // Initial zoom level display
             updateMapInfo();
+            
+            // Force map resize after a short delay to ensure proper rendering
+            setTimeout(function() {
+                map.invalidateSize();
+            }, 100);
         }
         
         // Show status message using Bootstrap alerts
@@ -463,12 +474,12 @@
                     const unitMarker = L.marker([unit.latitude, unit.longitude], {
                         icon: L.icon({
                             iconUrl: 'data:image/svg+xml;base64,' + btoa(`
-                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#0d6efd" width="24" height="24">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#0d6efd" width="32" height="32">
                                     <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
                                 </svg>
                             `),
-                            iconSize: [24, 24],
-                            iconAnchor: [12, 24]
+                            iconSize: [32, 32],
+                            iconAnchor: [16, 32]
                         })
                     }).addTo(unitsGroup);
                     
@@ -850,6 +861,11 @@
                     console.error('Error parsing search area coordinates:', e);
                 }
             }
+            
+            // Force map resize to ensure proper display
+            setTimeout(() => {
+                map.invalidateSize();
+            }, 250);
         }
         
         // Center map on incident
