@@ -29,6 +29,12 @@ def view_incident(incident_id):
     return render_template("incident_view.html", incident_id=incident_id)
 
 
+@app.route("/incident/<incident_id>/unit-checkin")
+def unit_checkin(incident_id):
+    """Unit checkin page"""
+    return render_template("unit_checkin.html", incident_id=incident_id)
+
+
 @app.route("/api/geocode/reverse", methods=["POST"])
 def reverse_geocode():
     """Reverse geocode coordinates to address"""
@@ -164,6 +170,126 @@ def generate_divisions_preview():
             "divisions": divisions,
             "count": len(divisions),
             "message": f"Generated {len(divisions)} search divisions for preview"
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/unit/checkin", methods=["POST"])
+def unit_checkin_api():
+    """Check in a unit to an incident"""
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['incident_id', 'unit_id', 'company_officer', 'number_of_personnel', 'latitude', 'longitude']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({"error": f"{field.replace('_', ' ').title()} is required"}), 400
+        
+        # Validate numeric fields
+        try:
+            personnel_count = int(data['number_of_personnel'])
+            latitude = float(data['latitude'])
+            longitude = float(data['longitude'])
+        except (ValueError, TypeError):
+            return jsonify({"error": "Invalid number format for personnel count or coordinates"}), 400
+        
+        if personnel_count < 1:
+            return jsonify({"error": "Personnel count must be at least 1"}), 400
+        
+        # Check if incident exists
+        incident = Incident.get_incident_by_id(data['incident_id'], db_manager)
+        if not incident:
+            return jsonify({"error": "Incident not found"}), 404
+        
+        # Check if unit already checked in
+        conn = db_manager.connect()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id FROM units 
+            WHERE incident_id = %s AND unit_id = %s
+        """, (data['incident_id'], data['unit_id']))
+        
+        existing_unit = cursor.fetchone()
+        if existing_unit:
+            cursor.close()
+            conn.close()
+            return jsonify({"error": f"Unit {data['unit_id']} is already checked in to this incident"}), 400
+        
+        # Insert unit
+        cursor.execute("""
+            INSERT INTO units (
+                incident_id, unit_id, company_officer, number_of_personnel, 
+                bsar_tech, latitude, longitude, notes
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (
+            data['incident_id'],
+            data['unit_id'],
+            data['company_officer'],
+            personnel_count,
+            data.get('bsar_tech', False),
+            latitude,
+            longitude,
+            data.get('notes', '')
+        ))
+        
+        unit_id = cursor.fetchone()[0]
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify({
+            "success": True,
+            "unit_id": data['unit_id'],
+            "message": f"Unit {data['unit_id']} checked in successfully"
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/incident/<incident_id>/units", methods=["GET"])
+def get_incident_units(incident_id):
+    """Get all units checked into an incident"""
+    try:
+        conn = db_manager.connect()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT 
+                unit_id, company_officer, number_of_personnel, bsar_tech,
+                latitude, longitude, status, checked_in_at, last_updated, notes
+            FROM units 
+            WHERE incident_id = %s 
+            ORDER BY checked_in_at DESC
+        """, (incident_id,))
+        
+        units = []
+        for row in cursor.fetchall():
+            units.append({
+                'unit_id': row[0],
+                'company_officer': row[1],
+                'number_of_personnel': row[2],
+                'bsar_tech': row[3],
+                'latitude': float(row[4]) if row[4] else None,
+                'longitude': float(row[5]) if row[5] else None,
+                'status': row[6],
+                'checked_in_at': row[7].isoformat() if row[7] else None,
+                'last_updated': row[8].isoformat() if row[8] else None,
+                'notes': row[9]
+            })
+        
+        cursor.close()
+        conn.close()
+        
+        return jsonify({
+            "success": True,
+            "units": units,
+            "count": len(units)
         })
         
     except Exception as e:
