@@ -46,7 +46,7 @@ CREATE TABLE search_divisions (
     assigned_team VARCHAR(255),
     team_leader VARCHAR(255),
     assigned_unit_id VARCHAR(50),
-    priority INTEGER DEFAULT 1,
+    priority VARCHAR(50) DEFAULT 'Low',
     search_type VARCHAR(50) DEFAULT 'primary',
     estimated_duration VARCHAR(50),
     status VARCHAR(50) DEFAULT 'unassigned',
