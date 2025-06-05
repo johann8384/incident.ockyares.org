@@ -19,6 +19,9 @@
             max-width: 600px;
             margin: 0 auto;
         }
+        .incident-marker {
+            filter: hue-rotate(120deg); /* Green color for incident marker */
+        }
     </style>
 </head>
 <body>
@@ -28,6 +31,7 @@
                 <div class="card-header">
                     <h2 class="card-title mb-0">Unit Checkin</h2>
                     <p class="card-text text-muted mb-0">Incident: <span id="incidentId">{{ incident_id }}</span></p>
+                    <p class="card-text text-muted mb-0">Location: <span id="incidentLocation">Loading...</span></p>
                 </div>
                 <div class="card-body">
                     <form id="checkinForm">
@@ -77,7 +81,9 @@
                             <div id="locationMap"></div>
                             <div class="mt-2">
                                 <small class="text-muted">
-                                    <span id="locationDisplay">Click "Get Device Location" or click on the map to set location</span>
+                                    <span id="locationDisplay">Click "Get Device Location" or click on the map to set location</span><br>
+                                    <span class="text-success">🟢 Green marker = Incident Location</span> | 
+                                    <span class="text-primary">🔵 Blue marker = Unit Location</span>
                                 </small>
                             </div>
                             <input type="hidden" id="latitude" name="latitude">
@@ -128,6 +134,8 @@
         const incidentId = '{{ incident_id }}';
         let map;
         let currentMarker;
+        let incidentMarker;
+        let incidentData = null;
 
         // Initialize map
         function initMap() {
@@ -142,6 +150,55 @@
             map.on('click', function(e) {
                 setLocation(e.latlng.lat, e.latlng.lng);
             });
+
+            // Load incident data and add incident marker
+            loadIncidentData();
+        }
+
+        // Load incident data
+        function loadIncidentData() {
+            fetch(`/api/incident/${incidentId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success && data.incident) {
+                        incidentData = data.incident;
+                        
+                        // Update incident location display
+                        if (incidentData.address) {
+                            document.getElementById('incidentLocation').textContent = incidentData.address;
+                        } else if (incidentData.incident_location) {
+                            const coords = incidentData.incident_location.coordinates;
+                            document.getElementById('incidentLocation').textContent = 
+                                `${coords[1].toFixed(6)}, ${coords[0].toFixed(6)}`;
+                        }
+                        
+                        // Add incident marker if location exists
+                        if (incidentData.incident_location) {
+                            const coords = incidentData.incident_location.coordinates;
+                            const lat = coords[1];
+                            const lng = coords[0];
+                            
+                            // Create custom green icon for incident
+                            const incidentIcon = L.divIcon({
+                                html: '<div style="background-color: #28a745; width: 25px; height: 25px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>',
+                                iconSize: [25, 25],
+                                iconAnchor: [12, 12],
+                                className: 'incident-marker'
+                            });
+                            
+                            incidentMarker = L.marker([lat, lng], { icon: incidentIcon })
+                                .addTo(map)
+                                .bindPopup(`<strong>Incident Location</strong><br>${incidentData.name}`);
+                            
+                            // Center map on incident location
+                            map.setView([lat, lng], 14);
+                        }
+                    }
+                })
+                .catch(error => {
+                    console.error('Error loading incident data:', error);
+                    document.getElementById('incidentLocation').textContent = 'Unable to load';
+                });
         }
 
         // Set location on map and form
@@ -149,20 +206,24 @@
             document.getElementById('latitude').value = lat;
             document.getElementById('longitude').value = lng;
             
-            // Remove existing marker
+            // Remove existing unit marker
             if (currentMarker) {
                 map.removeLayer(currentMarker);
             }
             
-            // Add new marker
-            currentMarker = L.marker([lat, lng]).addTo(map);
+            // Add new unit marker (default blue)
+            currentMarker = L.marker([lat, lng])
+                .addTo(map)
+                .bindPopup('<strong>Unit Location</strong>');
             
             // Update display
             document.getElementById('locationDisplay').textContent = 
-                `Location: ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+                `Unit Location: ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
             
-            // Center map on location
-            map.setView([lat, lng], Math.max(map.getZoom(), 15));
+            // Center map on location if incident marker doesn't exist
+            if (!incidentMarker) {
+                map.setView([lat, lng], Math.max(map.getZoom(), 15));
+            }
         }
 
         // Get device location
@@ -226,18 +287,30 @@
                 return;
             }
             
-            // Submit form
-            fetch('/api/unit/checkin', {
+            // Submit form using new unified endpoint
+            fetch(`/api/unit/${data.unit_id}/status`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify(data)
+                body: JSON.stringify({
+                    incident_id: data.incident_id,
+                    status: 'staging', // Check-in is staging status
+                    unit_name: data.unit_id, // Use unit_id as name
+                    unit_type: 'Unknown', // Default type
+                    unit_leader: data.company_officer,
+                    number_of_personnel: parseInt(data.number_of_personnel),
+                    bsar_tech: data.bsar_tech,
+                    latitude: parseFloat(data.latitude),
+                    longitude: parseFloat(data.longitude),
+                    notes: data.notes || 'Unit checked in',
+                    user_name: data.company_officer
+                })
             })
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    document.getElementById('checkedInUnitId').textContent = data.unit_id;
+                    document.getElementById('checkedInUnitId').textContent = document.getElementById('unitId').value;
                     new bootstrap.Modal(document.getElementById('successModal')).show();
                 } else {
                     alert('Error checking in unit: ' + (data.error || 'Unknown error'));
