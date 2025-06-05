@@ -100,7 +100,7 @@ CREATE TABLE incident_hospitals (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
--- Units table for tracking responding resources
+-- Units table for tracking responding resources (SINGLE TABLE)
 CREATE TABLE units (
     id SERIAL PRIMARY KEY,
     unit_id VARCHAR(50) UNIQUE NOT NULL,
@@ -108,13 +108,15 @@ CREATE TABLE units (
     unit_type VARCHAR(100) NOT NULL, -- Engine, Truck, Rescue, Command, etc.
     unit_leader VARCHAR(255),
     contact_info VARCHAR(255),
+    number_of_personnel INTEGER,
+    bsar_tech BOOLEAN DEFAULT FALSE,
     current_status VARCHAR(50) DEFAULT 'quarters',
     current_incident_id VARCHAR(50) REFERENCES incidents(incident_id),
     current_division_id VARCHAR(50),
     created_at TIMESTAMP DEFAULT NOW()
 );
 
--- Unit status history for tracking all status changes
+-- Unit status history for tracking all status changes (including checkins)
 CREATE TABLE unit_status_history (
     id SERIAL PRIMARY KEY,
     unit_id VARCHAR(50) REFERENCES units(unit_id),
@@ -123,6 +125,8 @@ CREATE TABLE unit_status_history (
     status VARCHAR(50) NOT NULL,
     percentage_complete INTEGER DEFAULT 0,
     location GEOMETRY(POINT, 4326),
+    latitude DECIMAL(10, 8),
+    longitude DECIMAL(11, 8),
     notes TEXT,
     timestamp TIMESTAMP DEFAULT NOW(),
     user_name VARCHAR(255)
@@ -154,6 +158,21 @@ CREATE INDEX idx_search_divisions_geom ON search_divisions USING GIST(area_geome
 CREATE INDEX idx_search_progress_geom ON search_progress USING GIST(location);
 CREATE INDEX idx_hospitals_geom ON hospitals USING GIST(hospital_location);
 CREATE INDEX idx_unit_status_location ON unit_status_history USING GIST(location);
+
+-- Create trigger for automatic geometry updates in status history
+CREATE OR REPLACE FUNCTION update_status_geometry()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.latitude IS NOT NULL AND NEW.longitude IS NOT NULL THEN
+        NEW.location = ST_SetSRID(ST_MakePoint(NEW.longitude, NEW.latitude), 4326);
+    END IF;
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+CREATE TRIGGER update_status_geometry_trigger
+    BEFORE INSERT OR UPDATE ON unit_status_history
+    FOR EACH ROW EXECUTE FUNCTION update_status_geometry();
 
 -- Create triggers for updated_at columns
 CREATE TRIGGER update_incidents_updated_at 
