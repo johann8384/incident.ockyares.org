@@ -172,16 +172,20 @@
                                         </div>
                                         <div class="card-body">
                                             <!-- Map Controls -->
-                                            <div class="d-flex flex-wrap gap-2 mb-3">
+                                            <div class="d-flex flex-wrap gap-2 mb-3 align-items-center">
                                                 <button class="btn btn-primary btn-sm" id="centerMapBtn">
                                                     <i class="bi bi-bullseye me-1"></i>Center
-                                                </button>
-                                                <button class="btn btn-outline-secondary btn-sm" id="toggleDivisionsBtn">
-                                                    <i class="bi bi-eye me-1"></i>Divisions
                                                 </button>
                                                 <button class="btn btn-success btn-sm" id="refreshBtn">
                                                     <i class="bi bi-arrow-clockwise me-1"></i>Refresh
                                                 </button>
+                                                <div class="ms-auto d-flex align-items-center gap-2">
+                                                    <small class="text-muted">Divisions</small>
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" id="divisionsToggle" checked>
+                                                        <label class="form-check-label" for="divisionsToggle"></label>
+                                                    </div>
+                                                </div>
                                             </div>
                                             
                                             <!-- Map Container -->
@@ -277,6 +281,7 @@
         let incidentData = null;
         let divisionsVisible = true;
         let unitsData = [];
+        let divisionsData = [];
         
         // Get incident ID from URL path
         const incidentId = window.location.pathname.split('/').pop();
@@ -366,6 +371,7 @@
                 displayIncidentData();
                 updateMap();
                 loadUnits(); // Load units after incident data
+                loadDivisions(); // Load divisions after incident data
                 
             } catch (error) {
                 showStatus('Error loading incident data: ' + error.message, 'error');
@@ -636,9 +642,6 @@
                 locationInfo.innerHTML = '<div class="text-muted">Location not set</div>';
             }
             
-            // Load divisions
-            loadDivisions();
-            
             // Show content, hide loading
             document.getElementById('loadingDiv').classList.add('d-none');
             document.getElementById('incidentContent').classList.remove('d-none');
@@ -651,6 +654,7 @@
                 const data = await response.json();
                 
                 if (data.success && data.divisions) {
+                    divisionsData = data.divisions;
                     displayDivisions(data.divisions);
                     displayDivisionsOnMap(data.divisions);
                 } else {
@@ -680,6 +684,9 @@
                 if (division.coordinates) {
                     // Convert lng,lat to lat,lng for Leaflet
                     coordinates = division.coordinates.map(coord => [coord[1], coord[0]]);
+                } else if (division.area_coordinates) {
+                    // Handle area_coordinates field
+                    coordinates = division.area_coordinates.map(coord => [coord[1], coord[0]]);
                 } else if (division.geom) {
                     try {
                         const geom = typeof division.geom === 'string' ? JSON.parse(division.geom) : division.geom;
@@ -877,14 +884,13 @@
         
         // Toggle divisions visibility
         function toggleDivisions() {
-            divisionsVisible = !divisionsVisible;
-            const btn = document.getElementById('toggleDivisionsBtn');
+            const toggle = document.getElementById('divisionsToggle');
+            divisionsVisible = toggle.checked;
+            
             if (divisionsVisible) {
                 map.addLayer(divisionsGroup);
-                btn.innerHTML = '<i class="bi bi-eye-slash me-1"></i>Divisions';
             } else {
                 map.removeLayer(divisionsGroup);
-                btn.innerHTML = '<i class="bi bi-eye me-1"></i>Divisions';
             }
         }
         
@@ -901,9 +907,9 @@
             
             // Event listeners
             document.getElementById('centerMapBtn').addEventListener('click', centerMap);
-            document.getElementById('toggleDivisionsBtn').addEventListener('click', toggleDivisions);
             document.getElementById('refreshBtn').addEventListener('click', refreshData);
             document.getElementById('showHospitalsBtn').addEventListener('click', loadHospitalData);
+            document.getElementById('divisionsToggle').addEventListener('change', toggleDivisions);
             
             // Auto-refresh units every 30 seconds
             setInterval(loadUnits, 30000);
