@@ -35,6 +35,12 @@
             width: 100%;
             height: 100%;
         }
+        .unit-status-online {
+            color: #198754;
+        }
+        .unit-status-offline {
+            color: #6c757d;
+        }
     </style>
 </head>
 <body class="bg-light">
@@ -52,9 +58,14 @@
                                     <p class="card-text mb-0" id="incidentTitle">Loading incident details...</p>
                                 </div>
                             </div>
-                            <a href="/" class="btn btn-outline-light">
-                                <i class="bi bi-arrow-left me-2"></i>Create New Incident
-                            </a>
+                            <div class="d-flex gap-2">
+                                <a href="/incident/{{ incident_id }}/unit-checkin" class="btn btn-outline-light">
+                                    <i class="bi bi-plus-circle me-2"></i>Unit Checkin
+                                </a>
+                                <a href="/" class="btn btn-outline-light">
+                                    <i class="bi bi-arrow-left me-2"></i>Create New Incident
+                                </a>
+                            </div>
                         </div>
                     </div>
                     
@@ -118,40 +129,70 @@
                                 </div>
                             </div>
                             
-                            <!-- Map Section -->
-                            <div class="card mb-4">
-                                <div class="card-header">
-                                    <h5 class="card-title mb-0">
-                                        <i class="bi bi-map me-2"></i>Incident Map
-                                    </h5>
-                                </div>
-                                <div class="card-body">
-                                    <!-- Map Controls -->
-                                    <div class="d-flex flex-wrap gap-2 mb-3">
-                                        <button class="btn btn-primary" id="centerMapBtn">
-                                            <i class="bi bi-bullseye me-2"></i>Center on Incident
-                                        </button>
-                                        <button class="btn btn-outline-secondary" id="toggleDivisionsBtn">
-                                            <i class="bi bi-eye me-2"></i>Toggle Divisions
-                                        </button>
-                                        <button class="btn btn-success" id="refreshBtn">
-                                            <i class="bi bi-arrow-clockwise me-2"></i>Refresh Data
-                                        </button>
-                                    </div>
-                                    
-                                    <!-- Map Container -->
-                                    <div class="map-container">
-                                        <div id="map" class="border"></div>
-                                        <div class="map-info">
-                                            <div class="mb-1">
-                                                <span class="badge bg-secondary" id="mapZoom">
-                                                    <i class="bi bi-zoom-in me-1"></i>Zoom: --
-                                                 </span>
+                            <!-- Units and Map Section -->
+                            <div class="row g-4 mb-4">
+                                <div class="col-lg-6">
+                                    <!-- Units Section -->
+                                    <div class="card h-100">
+                                        <div class="card-header">
+                                            <div class="d-flex justify-content-between align-items-center">
+                                                <h5 class="card-title mb-0">
+                                                    <i class="bi bi-people me-2"></i>Units On Scene
+                                                </h5>
+                                                <span class="badge bg-primary" id="unitCount">0</span>
                                             </div>
-                                            <div>
-                                                <span class="badge bg-dark" id="mapCoordinates">
-                                                    <i class="bi bi-crosshair me-1"></i>Lat: --, Lng: --
-                                                </span>
+                                        </div>
+                                        <div class="card-body">
+                                            <div id="unitsList">
+                                                <div class="text-muted text-center py-4">
+                                                    <i class="bi bi-person-plus fs-1 text-muted mb-2"></i>
+                                                    <p>No units checked in yet.</p>
+                                                    <a href="/incident/{{ incident_id }}/unit-checkin" class="btn btn-outline-primary">
+                                                        Check In First Unit
+                                                    </a>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="col-lg-6">
+                                    <!-- Map Section -->
+                                    <div class="card h-100">
+                                        <div class="card-header">
+                                            <h5 class="card-title mb-0">
+                                                <i class="bi bi-map me-2"></i>Incident Map
+                                            </h5>
+                                        </div>
+                                        <div class="card-body">
+                                            <!-- Map Controls -->
+                                            <div class="d-flex flex-wrap gap-2 mb-3">
+                                                <button class="btn btn-primary btn-sm" id="centerMapBtn">
+                                                    <i class="bi bi-bullseye me-1"></i>Center
+                                                </button>
+                                                <button class="btn btn-outline-secondary btn-sm" id="toggleDivisionsBtn">
+                                                    <i class="bi bi-eye me-1"></i>Divisions
+                                                </button>
+                                                <button class="btn btn-success btn-sm" id="refreshBtn">
+                                                    <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                                                </button>
+                                            </div>
+                                            
+                                            <!-- Map Container -->
+                                            <div class="map-container">
+                                                <div id="map" class="border"></div>
+                                                <div class="map-info">
+                                                    <div class="mb-1">
+                                                        <span class="badge bg-secondary" id="mapZoom">
+                                                            <i class="bi bi-zoom-in me-1"></i>Zoom: --
+                                                         </span>
+                                                    </div>
+                                                    <div>
+                                                        <span class="badge bg-dark" id="mapCoordinates">
+                                                            <i class="bi bi-crosshair me-1"></i>Lat: --, Lng: --
+                                                        </span>
+                                                    </div>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
@@ -167,25 +208,31 @@
                                 </div>
                                 <div class="card-body">
                                     <div class="row g-2">
-                                        <div class="col-sm-6 col-lg-3">
+                                        <div class="col-sm-6 col-lg-2">
                                             <div class="d-flex align-items-center">
                                                 <span class="legend-color" style="background: #dc3545;"></span>
                                                 <small>Incident Location</small>
                                             </div>
                                         </div>
-                                        <div class="col-sm-6 col-lg-3">
+                                        <div class="col-sm-6 col-lg-2">
                                             <div class="d-flex align-items-center">
                                                 <span class="legend-color" style="background: rgba(220, 53, 69, 0.3); border: 2px solid #dc3545;"></span>
                                                 <small>Search Area</small>
                                             </div>
                                         </div>
-                                        <div class="col-sm-6 col-lg-3">
+                                        <div class="col-sm-6 col-lg-2">
+                                            <div class="d-flex align-items-center">
+                                                <span class="legend-color" style="background: #0d6efd;"></span>
+                                                <small>Unit Location</small>
+                                            </div>
+                                        </div>
+                                        <div class="col-sm-6 col-lg-2">
                                             <div class="d-flex align-items-center">
                                                 <span class="legend-color" style="background: rgba(25, 135, 84, 0.3); border: 2px solid #198754;"></span>
                                                 <small>Assigned Division</small>
                                             </div>
                                         </div>
-                                        <div class="col-sm-6 col-lg-3">
+                                        <div class="col-sm-6 col-lg-2">
                                             <div class="d-flex align-items-center">
                                                 <span class="legend-color" style="background: rgba(255, 193, 7, 0.3); border: 2px solid #ffc107;"></span>
                                                 <small>Unassigned Division</small>
@@ -220,9 +267,10 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     
     <script>
-        let map, incidentMarker, searchAreaLayer, divisionsGroup;
+        let map, incidentMarker, searchAreaLayer, divisionsGroup, unitsGroup;
         let incidentData = null;
         let divisionsVisible = true;
+        let unitsData = [];
         
         // Get incident ID from URL path
         const incidentId = window.location.pathname.split('/').pop();
@@ -238,8 +286,10 @@
             // Initialize feature groups
             searchAreaLayer = new L.FeatureGroup();
             divisionsGroup = new L.FeatureGroup();
+            unitsGroup = new L.FeatureGroup();
             map.addLayer(searchAreaLayer);
             map.addLayer(divisionsGroup);
+            map.addLayer(unitsGroup);
 
             // Update zoom level display
             function updateMapInfo() {
@@ -297,6 +347,7 @@
                 incidentData = data.incident;
                 displayIncidentData();
                 updateMap();
+                loadUnits(); // Load units after incident data
                 
             } catch (error) {
                 showStatus('Error loading incident data: ' + error.message, 'error');
@@ -306,6 +357,125 @@
                     </div>
                 `;
             }
+        }
+        
+        // Load units data
+        async function loadUnits() {
+            try {
+                const response = await fetch(`/api/incident/${incidentId}/units`);
+                const data = await response.json();
+                
+                if (data.success && data.units) {
+                    unitsData = data.units;
+                    displayUnits(data.units);
+                    displayUnitsOnMap(data.units);
+                } else {
+                    // No units yet
+                    document.getElementById('unitCount').textContent = '0';
+                }
+            } catch (error) {
+                console.error('Error loading units:', error);
+            }
+        }
+        
+        // Display units list
+        function displayUnits(units) {
+            const unitsList = document.getElementById('unitsList');
+            const unitCount = document.getElementById('unitCount');
+            
+            if (!units || units.length === 0) {
+                unitCount.textContent = '0';
+                unitsList.innerHTML = `
+                    <div class="text-muted text-center py-4">
+                        <i class="bi bi-person-plus fs-1 text-muted mb-2"></i>
+                        <p>No units checked in yet.</p>
+                        <a href="/incident/${incidentId}/unit-checkin" class="btn btn-outline-primary">
+                            Check In First Unit
+                        </a>
+                    </div>
+                `;
+                return;
+            }
+            
+            unitCount.textContent = units.length;
+            
+            // Calculate total personnel
+            const totalPersonnel = units.reduce((sum, unit) => sum + (unit.number_of_personnel || 0), 0);
+            const bsarTechCount = units.filter(unit => unit.bsar_tech).length;
+            
+            unitsList.innerHTML = `
+                <div class="row g-2 mb-3">
+                    <div class="col-4 text-center">
+                        <div class="fw-bold text-primary">${units.length}</div>
+                        <small class="text-muted">Units</small>
+                    </div>
+                    <div class="col-4 text-center">
+                        <div class="fw-bold text-success">${totalPersonnel}</div>
+                        <small class="text-muted">Personnel</small>
+                    </div>
+                    <div class="col-4 text-center">
+                        <div class="fw-bold text-info">${bsarTechCount}</div>
+                        <small class="text-muted">BSAR Tech</small>
+                    </div>
+                </div>
+                <div class="list-group list-group-flush">
+                    ${units.map(unit => `
+                        <div class="list-group-item px-0">
+                            <div class="d-flex justify-content-between align-items-start">
+                                <div class="flex-grow-1">
+                                    <div class="d-flex align-items-center mb-1">
+                                        <h6 class="mb-0 me-2">Unit ${unit.unit_id}</h6>
+                                        ${unit.bsar_tech ? '<span class="badge bg-info">BSAR Tech</span>' : ''}
+                                    </div>
+                                    <p class="mb-1 text-muted">
+                                        <strong>Officer:</strong> ${unit.company_officer}<br>
+                                        <strong>Personnel:</strong> ${unit.number_of_personnel}
+                                    </p>
+                                    <small class="text-muted">
+                                        Checked in: ${new Date(unit.checked_in_at).toLocaleString()}
+                                    </small>
+                                </div>
+                                <div class="text-end">
+                                    <i class="bi bi-geo-alt-fill unit-status-online" title="Location available"></i>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+        
+        // Display units on map
+        function displayUnitsOnMap(units) {
+            if (!units || units.length === 0) return;
+            
+            unitsGroup.clearLayers();
+            
+            units.forEach((unit, index) => {
+                if (unit.latitude && unit.longitude) {
+                    const unitMarker = L.marker([unit.latitude, unit.longitude], {
+                        icon: L.icon({
+                            iconUrl: 'data:image/svg+xml;base64,' + btoa(`
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#0d6efd" width="24" height="24">
+                                    <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+                                </svg>
+                            `),
+                            iconSize: [24, 24],
+                            iconAnchor: [12, 24]
+                        })
+                    }).addTo(unitsGroup);
+                    
+                    const popupContent = `
+                        <b>Unit ${unit.unit_id}</b><br>
+                        <strong>Officer:</strong> ${unit.company_officer}<br>
+                        <strong>Personnel:</strong> ${unit.number_of_personnel}<br>
+                        <strong>BSAR Tech:</strong> ${unit.bsar_tech ? 'Yes' : 'No'}<br>
+                        <strong>Checked in:</strong> ${new Date(unit.checked_in_at).toLocaleString()}
+                    `;
+                    
+                    unitMarker.bindPopup(popupContent);
+                }
+            });
         }
         
         // Load hospital data
@@ -688,10 +858,10 @@
             const btn = document.getElementById('toggleDivisionsBtn');
             if (divisionsVisible) {
                 map.addLayer(divisionsGroup);
-                btn.innerHTML = '<i class="bi bi-eye-slash me-2"></i>Hide Divisions';
+                btn.innerHTML = '<i class="bi bi-eye-slash me-1"></i>Divisions';
             } else {
                 map.removeLayer(divisionsGroup);
-                btn.innerHTML = '<i class="bi bi-eye me-2"></i>Show Divisions';
+                btn.innerHTML = '<i class="bi bi-eye me-1"></i>Divisions';
             }
         }
         
@@ -711,6 +881,9 @@
             document.getElementById('toggleDivisionsBtn').addEventListener('click', toggleDivisions);
             document.getElementById('refreshBtn').addEventListener('click', refreshData);
             document.getElementById('showHospitalsBtn').addEventListener('click', loadHospitalData);
+            
+            // Auto-refresh units every 30 seconds
+            setInterval(loadUnits, 30000);
         });
     </script>
 </body>
