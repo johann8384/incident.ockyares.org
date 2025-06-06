@@ -1,3 +1,4 @@
+.DS_Store
 security-reports/
 tests
 docker/database/data
