@@ -29,6 +29,9 @@
                                 </div>
                             </div>
                             <div class="d-flex gap-2">
+                                <button type="button" class="btn btn-outline-light" data-bs-toggle="modal" data-bs-target="#qrCodeModal">
+                                    <i class="bi bi-qr-code me-2"></i>Mobile Check-in
+                                </button>
                                 <a href="#" id="unitCheckinBtn" class="btn btn-outline-light">
                                     <i class="bi bi-plus-circle me-2"></i>Unit Checkin
                                 </a>
@@ -235,6 +238,37 @@
         </div>
     </div>
 
+    <!-- QR Code Modal -->
+    <div class="modal fade" id="qrCodeModal" tabindex="-1" aria-labelledby="qrCodeModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-sm">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="qrCodeModalLabel">
+                        <i class="bi bi-qr-code me-2"></i>Mobile Check-in
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body text-center">
+                    <p class="mb-3">Scan this QR code with the mobile app to check in units:</p>
+                    <div id="qrCodeContainer" class="mb-3">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Generating QR code...</span>
+                        </div>
+                    </div>
+                    <div class="alert alert-info">
+                        <small>
+                            <i class="bi bi-info-circle me-1"></i>
+                            Incident ID: <strong id="qrIncidentId">{{ incident_id }}</strong>
+                        </small>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Unit Status Update Modal -->
     <div class="modal fade" id="unitStatusModal" tabindex="-1" aria-labelledby="unitStatusModalLabel" aria-hidden="true">
         <div class="modal-dialog">
@@ -327,10 +361,12 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- QR Code Library -->
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
     <!-- Custom JS -->
     <script src="{{ url_for('static', filename='js/incident-view.js') }}"></script>
 
-    <!-- Add percentage display update script -->
+    <!-- Add percentage display update script and QR code generation -->
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             const percentComplete = document.getElementById('percentComplete');
@@ -341,7 +377,38 @@
                     percentDisplay.textContent = this.value + '%';
                 });
             }
+
+            // Generate QR code when modal is shown
+            const qrCodeModal = document.getElementById('qrCodeModal');
+            qrCodeModal.addEventListener('show.bs.modal', function() {
+                generateQRCode();
+            });
         });
+
+        function generateQRCode() {
+            const incidentId = '{{ incident_id }}';
+            const qrCodeContainer = document.getElementById('qrCodeContainer');
+            const qrIncidentId = document.getElementById('qrIncidentId');
+            
+            // Update incident ID display
+            qrIncidentId.textContent = incidentId;
+            
+            // Generate QR code for mobile app
+            const qrData = `taskforce://checkin/${incidentId}`;
+            
+            // Clear container
+            qrCodeContainer.innerHTML = '';
+            
+            // Generate QR code
+            QRCode.toCanvas(qrData, { width: 200, margin: 2 }, function(error, canvas) {
+                if (error) {
+                    console.error('QR Code generation error:', error);
+                    qrCodeContainer.innerHTML = '<div class="alert alert-danger">Error generating QR code</div>';
+                } else {
+                    qrCodeContainer.appendChild(canvas);
+                }
+            });
+        }
     </script>
 </body>
 </html>
