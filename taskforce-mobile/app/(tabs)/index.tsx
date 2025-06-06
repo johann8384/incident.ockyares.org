@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { BarCodeScanner } from 'expo-barcode-scanner';
+import { CameraView } from 'expo-camera';
 import { StatusBar } from 'expo-status-bar';
 
 import IncidentScanner from '@/components/IncidentScanner';
@@ -36,7 +36,7 @@ export default function HomeScreen() {
 
     // Request camera permission
     (async () => {
-      const { status } = await BarCodeScanner.requestPermissionsAsync();
+      const { status } = await CameraView.requestCameraPermissionsAsync();
       setHasPermission(status === 'granted');
       setLoading(false);
     })();
