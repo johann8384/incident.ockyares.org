@@ -6,7 +6,7 @@ import {
   TouchableOpacity,
   Dimensions,
 } from 'react-native';
-import { CameraView } from 'expo-camera';
+import { Camera } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
 
 interface IncidentScannerProps {
@@ -32,12 +32,12 @@ export default function IncidentScanner({ onScanSuccess, onManualEntry }: Incide
 
   return (
     <View style={styles.container}>
-      <CameraView
+      <Camera
         style={StyleSheet.absoluteFillObject}
-        facing="back"
-        onBarcodeScanned={scanning ? handleBarcodeScanned : undefined}
-        barcodeScannerSettings={{
-          barcodeTypes: ['qr'],
+        type={Camera.Constants.Type.back}
+        onBarCodeScanned={scanning ? handleBarcodeScanned : undefined}
+        barCodeScannerSettings={{
+          barCodeTypes: [Camera.Constants.BarCodeType.qr],
         }}
       />
       
