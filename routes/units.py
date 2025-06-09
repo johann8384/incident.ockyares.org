@@ -21,6 +21,7 @@ def update_unit_status_unified(unit_id):
     """
     Enhanced unified status update endpoint with business logic for:
     - Automatic status transitions (assigned->operating when % > 0)
+    - Division completion and unit recovery (operating->recovering when division 100% complete)
     - Division unassignment when going to staging/out of service/quarters
     - Division status updates when units are unassigned
     """
@@ -35,9 +36,9 @@ def update_unit_status_unified(unit_id):
     incident_id = data['incident_id']
     new_status = data['status']
     division_id = data.get('division_id')
-    percentage_complete = data.get('percentage_complete', 0)
+    percentage_complete = int(data.get('percentage_complete', 0))
     
-    logger.info(f"Updating unit {unit_id} status to {new_status} for incident {incident_id}")
+    logger.info(f"Updating unit {unit_id} status to {new_status} for incident {incident_id}, progress: {percentage_complete}%")
     
     try:
         with db_manager.get_connection() as conn:
@@ -62,8 +63,26 @@ def update_unit_status_unified(unit_id):
             # 1. Assigned->Operating automatically when % > 0
             if current_status == 'assigned' and percentage_complete > 0:
                 new_status = 'operating'
+                logger.info(f"Auto-transitioning unit {unit_id} from assigned to operating due to progress > 0%")
             
-            # 2. Handle division unassignment for certain status changes
+            # 2. Operating->Recovering automatically when division 100% complete
+            if current_status == 'operating' and percentage_complete == 100:
+                new_status = 'recovering'
+                logger.info(f"Auto-transitioning unit {unit_id} from operating to recovering due to 100% completion")
+                
+                # Mark the division as completed and unassign the unit
+                if current_division:
+                    cursor.execute("""
+                        UPDATE search_divisions 
+                        SET status = 'completed', assigned_unit_id = NULL
+                        WHERE incident_id = %s AND division_id = %s
+                    """, (incident_id, current_division))
+                    logger.info(f"Marked division {current_division} as completed and unassigned unit {unit_id}")
+                    
+                    # Clear division assignment since it's now completed
+                    division_id = None
+            
+            # 3. Handle division unassignment for certain status changes
             units_to_unassign_divisions = ['staging', 'out of service', 'quarters']
             if new_status in units_to_unassign_divisions and current_division:
                 # Unassign division from unit
@@ -76,7 +95,7 @@ def update_unit_status_unified(unit_id):
                 logger.info(f"Unassigned unit {unit_id} from division {current_division}")
                 division_id = None  # Clear division assignment
             
-            # 3. Handle "out of service" status - unassign from division
+            # 4. Handle "out of service" status - unassign from division
             if new_status == 'out of service' and current_division:
                 cursor.execute("""
                     UPDATE search_divisions 
@@ -87,7 +106,7 @@ def update_unit_status_unified(unit_id):
                 logger.info(f"Unit {unit_id} going out of service - unassigned from division {current_division}")
                 division_id = None
             
-            # 4. If recovering->operating, require division selection
+            # 5. If recovering->operating, require division selection
             if current_status == 'recovering' and new_status == 'operating':
                 if not division_id:
                     return jsonify({"error": "Division selection required when returning to operating status"}), 400
@@ -98,6 +117,7 @@ def update_unit_status_unified(unit_id):
                     SET assigned_unit_id = %s, status = 'assigned'
                     WHERE incident_id = %s AND division_id = %s
                 """, (unit_id, incident_id, division_id))
+                logger.info(f"Assigned unit {unit_id} to new division {division_id} when returning to operating")
             
             # Update unit status
             cursor.execute("""
@@ -112,18 +132,25 @@ def update_unit_status_unified(unit_id):
                 (unit_id, incident_id, division_id, status, percentage_complete, latitude, longitude, notes, user_name)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
-                unit_id, incident_id, division_id, new_status, percentage_complete,
+                unit_id, incident_id, current_division if percentage_complete == 100 else division_id, 
+                new_status, percentage_complete,
                 data.get('latitude'), data.get('longitude'), data.get('notes'), data.get('user_name')
             ))
             
             conn.commit()
             
-            logger.info(f"Unit {unit_id} status updated to {new_status}")
+            # Prepare response message
+            message = f"Unit {unit_id} status updated to {new_status}"
+            if percentage_complete == 100 and current_status == 'operating':
+                message += f" (division completed automatically)"
+            
+            logger.info(message)
             return jsonify({
                 "success": True,
-                "message": f"Unit {unit_id} status updated to {new_status}",
+                "message": message,
                 "new_status": new_status,
-                "division_id": division_id
+                "division_id": division_id,
+                "auto_transitioned": current_status != new_status and new_status == 'recovering'
             })
             
     except Exception as e:
@@ -146,12 +173,14 @@ def get_unit_divisions(unit_id):
             # Get divisions that are either:
             # 1. Currently assigned to this unit
             # 2. Unassigned (available for assignment)
+            # Exclude completed divisions from selection
             cursor.execute("""
                 SELECT division_id, division_name, status, assigned_unit_id, priority,
                        ST_AsGeoJSON(division_polygon) as polygon_geojson
                 FROM search_divisions 
                 WHERE incident_id = %s 
                 AND (assigned_unit_id = %s OR assigned_unit_id IS NULL)
+                AND status != 'completed'
                 ORDER BY 
                     CASE WHEN assigned_unit_id = %s THEN 0 ELSE 1 END,  -- Show assigned divisions first
                     priority DESC,
@@ -170,7 +199,7 @@ def get_unit_divisions(unit_id):
                     'is_assigned_to_unit': row[3] == unit_id
                 })
             
-            logger.info(f"Retrieved {len(divisions)} divisions for unit {unit_id} in incident {incident_id}")
+            logger.info(f"Retrieved {len(divisions)} available divisions for unit {unit_id} in incident {incident_id}")
             return jsonify({
                 "success": True,
                 "divisions": divisions,
