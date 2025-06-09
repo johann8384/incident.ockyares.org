@@ -1,0 +1,9 @@
+            cursor.execute("""
+                SELECT incident_id, name, incident_type, description, 
+                       ST_X(incident_location) as latitude, 
+                       ST_Y(incident_location) as longitude, 
+                       address, status, created_at
+                FROM incidents 
+                WHERE status = 'active'
+                ORDER BY created_at DESC
+            """)
