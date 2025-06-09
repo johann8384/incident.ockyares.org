@@ -26,10 +26,17 @@ function updateMapLocation(lat, lng) {
     map.setView([lat, lng], 15);
 }
 
-// Load divisions for incident
-async function loadDivisions() {
+// Load divisions for specific unit
+async function loadDivisionsForUnit(unitId) {
+    if (!unitId) {
+        // Clear division select if no unit ID
+        const divisionSelect = document.getElementById('division');
+        divisionSelect.innerHTML = '<option value="">Select Division</option>';
+        return;
+    }
+
     try {
-        const data = await apiCall(`/api/incident/${incidentId}/divisions`);
+        const data = await apiCall(`/api/unit/${unitId}/divisions?incident_id=${incidentId}`);
         
         const divisionSelect = document.getElementById('division');
         divisionSelect.innerHTML = '<option value="">Select Division</option>';
@@ -38,12 +45,30 @@ async function loadDivisions() {
             data.divisions.forEach(division => {
                 const option = document.createElement('option');
                 option.value = division.division_id;
-                option.textContent = division.division_name;
+                
+                // Show division name with status indicator
+                let displayText = division.division_name;
+                if (division.is_assigned_to_unit) {
+                    displayText += ' (Currently Assigned)';
+                    option.selected = true; // Auto-select currently assigned division
+                } else if (division.assigned_unit_id) {
+                    displayText += ` (Assigned to ${division.assigned_unit_id})`;
+                    option.disabled = true; // Disable divisions assigned to other units
+                } else {
+                    displayText += ' (Available)';
+                }
+                
+                if (division.priority && division.priority !== 'Medium') {
+                    displayText += ` [${division.priority}]`;
+                }
+                
+                option.textContent = displayText;
                 divisionSelect.appendChild(option);
             });
         }
     } catch (error) {
-        console.error('Error loading divisions:', error);
+        console.error('Error loading divisions for unit:', error);
+        showAlert('Error loading divisions: ' + error.message, 'warning');
     }
 }
 
@@ -56,6 +81,12 @@ function handleStatusChange() {
     // Show division selection for assigned/operating/recovering
     if (['assigned', 'operating', 'recovering'].includes(status)) {
         divisionSection.style.display = 'block';
+        
+        // Reload divisions for current unit when division section becomes visible
+        const unitId = document.getElementById('unitId').value;
+        if (unitId) {
+            loadDivisionsForUnit(unitId);
+        }
     } else {
         divisionSection.style.display = 'none';
     }
@@ -107,6 +138,9 @@ async function handleFormSubmission(e) {
         showAlert('Status updated successfully', 'success');
         loadStatusHistory();
         
+        // Reload divisions after status update in case assignments changed
+        loadDivisionsForUnit(unitId);
+        
     } catch (error) {
         showAlert('Error updating status: ' + error.message, 'danger');
     }
@@ -151,6 +185,15 @@ function handleUnitIdChange() {
     const unitId = document.getElementById('unitId').value;
     if (unitId) {
         loadStatusHistory();
+        
+        // Load divisions for this specific unit
+        const status = document.getElementById('status').value;
+        if (['assigned', 'operating', 'recovering'].includes(status)) {
+            loadDivisionsForUnit(unitId);
+        }
+    } else {
+        // Clear divisions if no unit ID
+        loadDivisionsForUnit(null);
     }
 }
 
@@ -158,7 +201,6 @@ function handleUnitIdChange() {
 document.addEventListener('DOMContentLoaded', function() {
     initMap();
     initCommonFeatures();
-    loadDivisions();
     
     // Event listeners
     document.getElementById('status').addEventListener('change', handleStatusChange);
@@ -166,4 +208,5 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('getCurrentLocation').addEventListener('click', handleGetCurrentLocation);
     document.getElementById('statusForm').addEventListener('submit', handleFormSubmission);
     document.getElementById('unitId').addEventListener('blur', handleUnitIdChange);
+    document.getElementById('unitId').addEventListener('input', handleUnitIdChange); // Also trigger on input for real-time updates
 });
