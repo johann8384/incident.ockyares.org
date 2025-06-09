@@ -9,8 +9,8 @@ import {
   Alert,
   Switch,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
-import * as Location from 'expo-location';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 
@@ -42,6 +42,22 @@ export default function UnitCheckinScreen() {
   const getCurrentLocation = async () => {
     setLocationLoading(true);
     try {
+      if (Platform.OS === 'web' || __DEV__) {
+        // Fallback for web/emulator - simulate location
+        setTimeout(() => {
+          setFormData(prev => ({
+            ...prev,
+            latitude: 37.7749, // San Francisco coordinates as example
+            longitude: -122.4194,
+          }));
+          Alert.alert('Success', 'Mock location set for testing');
+          setLocationLoading(false);
+        }, 1000);
+        return;
+      }
+
+      // For actual device with native modules
+      const Location = await import('expo-location');
       let { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('Permission denied', 'Location permission is required for unit checkin');
@@ -141,6 +157,9 @@ export default function UnitCheckinScreen() {
       <ThemedView style={styles.header}>
         <ThemedText type="title">Unit Checkin</ThemedText>
         <ThemedText type="subtitle">Incident: {incidentId}</ThemedText>
+        {(__DEV__ || Platform.OS === 'web') && (
+          <Text style={styles.devNote}>Development Mode: Using mock location</Text>
+        )}
       </ThemedView>
 
       <ThemedView style={styles.form}>
@@ -265,6 +284,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     borderBottomWidth: 1,
     borderBottomColor: '#e0e0e0',
+  },
+  devNote: {
+    fontSize: 12,
+    color: '#ff6b35',
+    fontStyle: 'italic',
+    marginTop: 5,
   },
   form: {
     padding: 20,
