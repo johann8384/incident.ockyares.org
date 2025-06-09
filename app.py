@@ -215,6 +215,93 @@ def search_hospitals():
         )
 
 
+@app.route("/api/divisions/generate", methods=["POST"])
+@log_request_data
+def generate_divisions_preview():
+    """Generate search divisions for preview (without saving to database)"""
+    data = request.get_json()
+
+    # Validate required fields
+    if not data.get("coordinates") or len(data.get("coordinates", [])) < 3:
+        logger.warning(f"Invalid coordinates for division generation: {data.get('coordinates')}")
+        return (
+            jsonify(
+                {"error": "Search area coordinates required (minimum 3 points)"}
+            ),
+            400,
+        )
+
+    # Create temporary incident instance for division generation
+    incident = Incident(db_manager)
+
+    # Generate divisions without saving
+    divisions = incident.generate_divisions_preview(
+        search_area_coordinates=data["coordinates"],
+        area_size_m2=data.get("area_size_m2", 40000),
+    )
+
+    logger.info(f"Generated {len(divisions)} divisions for preview")
+    return jsonify(
+        {
+            "success": True,
+            "divisions": divisions,
+            "count": len(divisions),
+            "message": f"Generated {len(divisions)} search divisions for preview",
+        }
+    )
+
+
+@app.route("/api/incident", methods=["POST"])
+@log_request_data
+def create_incident():
+    """Create new incident with full data including location, hospitals, and divisions"""
+    data = request.get_json()
+
+    # Validate required fields
+    if not data.get("name") or not data.get("incident_type"):
+        logger.warning("Incident creation attempted without required fields")
+        return jsonify({"error": "Name and incident type are required"}), 400
+
+    logger.info(f"Creating incident: {data.get('name')} ({data.get('incident_type')})")
+
+    # Create incident with all available data
+    incident = Incident(db_manager)
+    incident_id = incident.create_incident(
+        name=data["name"],
+        incident_type=data["incident_type"],
+        description=data.get("description", ""),
+        latitude=data.get("latitude"),
+        longitude=data.get("longitude"),
+        address=data.get("address"),
+        hospital_data=data.get("hospital_data"),
+        search_area_coordinates=data.get("search_area_coordinates"),
+        divisions=data.get("divisions"),  # Save divisions if provided
+    )
+
+    logger.info(f"Incident created successfully: {incident_id}")
+    return jsonify(
+        {
+            "success": True,
+            "incident_id": incident_id,
+            "message": "Incident created successfully",
+        }
+    )
+
+
+@app.route("/api/incident/<incident_id>", methods=["GET"])
+@log_request_data
+def get_incident(incident_id):
+    """Get incident details including hospitals and divisions"""
+    incident = Incident.get_incident_by_id(incident_id, db_manager)
+    if not incident:
+        logger.warning(f"Attempt to retrieve non-existent incident: {incident_id}")
+        return jsonify({"error": "Incident not found"}), 404
+
+    incident_data = incident.get_incident_data()
+    logger.info(f"Retrieved incident data for: {incident_id}")
+    return jsonify({"success": True, "incident": incident_data})
+
+
 @app.route("/api/incidents/active", methods=["GET"])
 @log_request_data
 def get_active_incidents():
