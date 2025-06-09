@@ -166,6 +166,71 @@ def get_active_incidents():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/unit/checkin", methods=["POST"])
+@log_request_data
+def unit_checkin_api():
+    """
+    Backward compatibility endpoint for unit check-in
+    Redirects to unified status update with staging status
+    """
+    data = request.get_json()
+    
+    # Check if incident exists first
+    incident = Incident.get_incident_by_id(data.get("incident_id"), db_manager)
+    if not incident:
+        logger.warning(f"Unit checkin attempted for non-existent incident: {data.get('incident_id')}")
+        return jsonify({"error": "Incident not found"}), 404
+
+    logger.info(f"Unit {data.get('unit_id')} checking in to incident {data.get('incident_id')}")
+
+    # Map old checkin fields to new status update format
+    status_data = {
+        'incident_id': data.get('incident_id'),
+        'new_status': 'staging',  # Check-in is staging status
+        'unit_name': data.get('unit_id'),  # Use unit_id as name if no name provided
+        'unit_type': data.get('unit_type', 'Unknown'),
+        'unit_leader': data.get('company_officer'),
+        'contact_info': data.get('contact_info'),
+        'number_of_personnel': data.get('number_of_personnel'),
+        'bsar_tech': data.get('bsar_tech', False),
+        'latitude': data.get('latitude'),
+        'longitude': data.get('longitude'),
+        'notes': data.get('notes', 'Unit checked in'),
+        'user_name': data.get('company_officer')
+    }
+    
+    # Create unit and update status
+    unit = Unit()
+    unit.unit_id = data.get('unit_id')
+    result = unit.update_status(**status_data)
+    
+    if result["success"]:
+        logger.info(f"Unit checkin successful: {data.get('unit_id')}")
+        return jsonify({
+            "success": True,
+            "unit_id": data.get('unit_id'),
+            "message": result["message"]
+        })
+    else:
+        logger.error(f"Unit checkin failed: {result['error']}")
+        return jsonify({"error": result["error"]}), 400
+
+
+@app.route("/health")
+def health_check():
+    """Health check endpoint"""
+    try:
+        # Test database connection
+        db_manager.connect()
+        db_manager.close()
+
+        logger.info("Health check successful")
+        return jsonify({"status": "healthy", "database": "connected"})
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return jsonify({"status": "unhealthy", "error": str(e)}), 503
+
+
 if __name__ == "__main__":
     # Ensure logs directory exists
     os.makedirs('logs', exist_ok=True)
