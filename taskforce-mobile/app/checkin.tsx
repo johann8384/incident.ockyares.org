@@ -44,7 +44,18 @@ export default function UnitCheckinScreen() {
   const [loading, setLoading] = useState(false);
   const [locationLoading, setLocationLoading] = useState(false);
 
-  const API_BASE_URL = 'http://localhost:5000'; // TODO: Make configurable
+  // Use different URLs for different platforms
+  const getApiUrl = () => {
+    if (Platform.OS === 'android') {
+      return 'http://10.0.2.2'; // Android emulator special IP
+    } else if (Platform.OS === 'ios') {
+      return 'http://localhost'; // iOS simulator can use localhost
+    } else {
+      return 'http://localhost'; // Web/other platforms
+    }
+  };
+
+  const API_BASE_URL = getApiUrl();
 
   const getCurrentLocation = async () => {
     setLocationLoading(true);
@@ -127,6 +138,7 @@ export default function UnitCheckinScreen() {
         unit_type: 'Field Unit', // Default value
       };
 
+      console.log('Submitting to:', `${API_BASE_URL}/api/unit/checkin`);
       const response = await fetch(`${API_BASE_URL}/api/unit/checkin`, {
         method: 'POST',
         headers: {
@@ -167,7 +179,10 @@ export default function UnitCheckinScreen() {
       }
     } catch (error) {
       console.error('Checkin error:', error);
-      Alert.alert('Error', 'Failed to connect to server. Please check your connection.');
+      Alert.alert(
+        'Connection Error', 
+        `Failed to connect to server at ${API_BASE_URL}. Please check your connection.`
+      );
     } finally {
       setLoading(false);
     }
@@ -188,6 +203,7 @@ export default function UnitCheckinScreen() {
         {incidentAddress && (
           <Text style={styles.incidentAddress}>📍 {incidentAddress}</Text>
         )}
+        <Text style={styles.debugText}>API: {API_BASE_URL}</Text>
         {(__DEV__ || Platform.OS === 'web') && (
           <Text style={styles.devNote}>Development Mode: Using mock location</Text>
         )}
@@ -317,6 +333,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
     marginTop: 4,
+  },
+  debugText: {
+    fontSize: 12,
+    color: '#888',
+    marginTop: 5,
+    fontStyle: 'italic',
   },
   devNote: {
     fontSize: 12,
