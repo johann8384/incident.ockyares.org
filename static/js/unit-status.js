@@ -99,10 +99,18 @@ function handleStatusChange() {
     }
 }
 
-// Percentage slider handler
+// Percentage slider handler with completion warning
 function handlePercentageChange() {
     const percentage = document.getElementById('percentage');
-    document.getElementById('percentageValue').textContent = percentage.value + '%';
+    const percentageValue = document.getElementById('percentageValue');
+    const status = document.getElementById('status').value;
+    
+    percentageValue.textContent = percentage.value + '%';
+    
+    // Show warning when approaching 100% completion
+    if (percentage.value == 100 && status === 'operating') {
+        percentageValue.innerHTML = percentage.value + '% <small class="text-warning">(Will auto-transition to Recovering)</small>';
+    }
 }
 
 // Get current location
@@ -117,11 +125,29 @@ function handleGetCurrentLocation() {
 async function handleFormSubmission(e) {
     e.preventDefault();
     
+    const percentage = parseInt(document.getElementById('percentage').value);
+    const currentStatus = document.getElementById('status').value;
+    
+    // Warn user about 100% completion auto-transition
+    if (percentage === 100 && currentStatus === 'operating') {
+        const confirmed = confirm(
+            'Setting progress to 100% will automatically:\n' +
+            '• Mark the division as COMPLETED\n' +
+            '• Change your unit status to RECOVERING\n' +
+            '• Unassign you from the division\n\n' +
+            'Do you want to continue?'
+        );
+        
+        if (!confirmed) {
+            return;
+        }
+    }
+    
     const formData = {
         incident_id: incidentId,
-        status: document.getElementById('status').value,
+        status: currentStatus,
         division_id: document.getElementById('division').value || null,
-        percentage_complete: document.getElementById('percentage').value,
+        percentage_complete: percentage,
         latitude: document.getElementById('latitude').value || null,
         longitude: document.getElementById('longitude').value || null,
         notes: document.getElementById('notes').value,
@@ -130,12 +156,27 @@ async function handleFormSubmission(e) {
 
     try {
         const unitId = document.getElementById('unitId').value;
-        await apiCall(`/api/unit/${unitId}/status`, {
+        const response = await apiCall(`/api/unit/${unitId}/status`, {
             method: 'POST',
             body: JSON.stringify(formData)
         });
         
-        showAlert('Status updated successfully', 'success');
+        // Show appropriate success message
+        let message = 'Status updated successfully';
+        if (response.auto_transitioned) {
+            message = 'Division completed! Unit automatically transitioned to Recovering status.';
+            
+            // Update the form to reflect the new status
+            document.getElementById('status').value = response.new_status;
+            document.getElementById('percentage').value = 0;
+            handleStatusChange(); // Refresh UI sections
+            handlePercentageChange(); // Reset percentage display
+            
+            showAlert(message, 'success');
+        } else {
+            showAlert(message, 'success');
+        }
+        
         loadStatusHistory();
         
         // Reload divisions after status update in case assignments changed
@@ -161,9 +202,20 @@ async function loadStatusHistory() {
             data.history.forEach(entry => {
                 const historyItem = document.createElement('div');
                 historyItem.className = 'border-bottom pb-2 mb-2';
+                
+                // Add special styling for completion entries
+                let statusClass = '';
+                let statusText = entry.status.replace('_', ' ').toUpperCase();
+                if (entry.percentage_complete === 100) {
+                    statusClass = 'text-success fw-bold';
+                    statusText += ' (DIVISION COMPLETED)';
+                } else if (entry.status === 'recovering') {
+                    statusClass = 'text-info';
+                }
+                
                 historyItem.innerHTML = `
                     <div class="d-flex justify-content-between">
-                        <strong>${entry.status.replace('_', ' ').toUpperCase()}</strong>
+                        <strong class="${statusClass}">${statusText}</strong>
                         <small class="text-muted">${formatDate(entry.timestamp)}</small>
                     </div>
                     ${entry.division_name ? `<div>Division: ${entry.division_name}</div>` : ''}
