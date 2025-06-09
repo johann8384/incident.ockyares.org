@@ -21,7 +21,7 @@ def update_unit_status_unified(unit_id):
     """
     Enhanced unified status update endpoint with business logic for:
     - Automatic status transitions (assigned->operating when % > 0)
-    - Division completion and unit recovery (operating->recovering when division 100% complete)
+    - Division completion and unit recovery (100% complete -> recovering + division completed)
     - Division unassignment when going to staging/out of service/quarters
     - Division status updates when units are unassigned
     """
@@ -34,11 +34,11 @@ def update_unit_status_unified(unit_id):
         return jsonify({"error": error}), 400
     
     incident_id = data['incident_id']
-    new_status = data['status']
+    requested_status = data['status']
     division_id = data.get('division_id')
     percentage_complete = int(data.get('percentage_complete', 0))
     
-    logger.info(f"Updating unit {unit_id} status to {new_status} for incident {incident_id}, progress: {percentage_complete}%")
+    logger.info(f"Unit {unit_id} requesting status {requested_status} for incident {incident_id}, progress: {percentage_complete}%")
     
     try:
         with db_manager.get_connection() as conn:
@@ -58,34 +58,46 @@ def update_unit_status_unified(unit_id):
             current_status = current_unit[0]
             current_division = current_unit[1]
             
+            # Start with the requested status
+            new_status = requested_status
+            auto_transitioned = False
+            
             # Apply business logic for status transitions
             
-            # 1. Assigned->Operating automatically when % > 0
-            if current_status == 'assigned' and percentage_complete > 0:
-                new_status = 'operating'
-                logger.info(f"Auto-transitioning unit {unit_id} from assigned to operating due to progress > 0%")
-            
-            # 2. Operating->Recovering automatically when division 100% complete
-            if current_status == 'operating' and percentage_complete == 100:
+            # 1. 100% completion triggers automatic division completion and recovery
+            if percentage_complete == 100:
                 new_status = 'recovering'
-                logger.info(f"Auto-transitioning unit {unit_id} from operating to recovering due to 100% completion")
+                auto_transitioned = True
+                logger.info(f"100% completion reported - auto-transitioning unit {unit_id} to recovering")
                 
-                # Mark the division as completed and unassign the unit
-                if current_division:
+                # Determine which division to mark as completed
+                completed_division = division_id or current_division
+                
+                if completed_division:
                     cursor.execute("""
                         UPDATE search_divisions 
                         SET status = 'completed', assigned_unit_id = NULL
                         WHERE incident_id = %s AND division_id = %s
-                    """, (incident_id, current_division))
-                    logger.info(f"Marked division {current_division} as completed and unassigned unit {unit_id}")
+                    """, (incident_id, completed_division))
+                    
+                    if cursor.rowcount > 0:
+                        logger.info(f"Marked division {completed_division} as completed and unassigned unit {unit_id}")
+                    else:
+                        logger.warning(f"No division found to mark as completed: {completed_division}")
                     
                     # Clear division assignment since it's now completed
                     division_id = None
+                else:
+                    logger.warning(f"No division specified for completion by unit {unit_id}")
             
-            # 3. Handle division unassignment for certain status changes
-            units_to_unassign_divisions = ['staging', 'out of service', 'quarters']
-            if new_status in units_to_unassign_divisions and current_division:
-                # Unassign division from unit
+            # 2. Assigned->Operating automatically when % > 0 (but not 100% which is handled above)
+            elif current_status == 'assigned' and percentage_complete > 0:
+                new_status = 'operating'
+                logger.info(f"Auto-transitioning unit {unit_id} from assigned to operating due to progress > 0%")
+            
+            # 3. Handle division unassignment for certain status changes (only if not completing)
+            elif new_status in ['staging', 'out of service', 'quarters'] and current_division:
+                # Unassign division from unit (but don't mark as completed)
                 cursor.execute("""
                     UPDATE search_divisions 
                     SET assigned_unit_id = NULL, status = 'unassigned'
@@ -95,19 +107,8 @@ def update_unit_status_unified(unit_id):
                 logger.info(f"Unassigned unit {unit_id} from division {current_division}")
                 division_id = None  # Clear division assignment
             
-            # 4. Handle "out of service" status - unassign from division
-            if new_status == 'out of service' and current_division:
-                cursor.execute("""
-                    UPDATE search_divisions 
-                    SET assigned_unit_id = NULL, status = 'unassigned'
-                    WHERE incident_id = %s AND assigned_unit_id = %s
-                """, (incident_id, unit_id))
-                
-                logger.info(f"Unit {unit_id} going out of service - unassigned from division {current_division}")
-                division_id = None
-            
-            # 5. If recovering->operating, require division selection
-            if current_status == 'recovering' and new_status == 'operating':
+            # 4. If recovering->operating, require division selection
+            elif current_status == 'recovering' and new_status == 'operating':
                 if not division_id:
                     return jsonify({"error": "Division selection required when returning to operating status"}), 400
                 
@@ -126,13 +127,14 @@ def update_unit_status_unified(unit_id):
                 WHERE unit_id = %s AND current_incident_id = %s
             """, (new_status, division_id, unit_id, incident_id))
             
-            # Record status history
+            # Record status history - use the division that was completed if 100%
+            history_division_id = current_division if percentage_complete == 100 else (division_id or current_division)
             cursor.execute("""
                 INSERT INTO unit_status_history 
                 (unit_id, incident_id, division_id, status, percentage_complete, latitude, longitude, notes, user_name)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
-                unit_id, incident_id, current_division if percentage_complete == 100 else division_id, 
+                unit_id, incident_id, history_division_id, 
                 new_status, percentage_complete,
                 data.get('latitude'), data.get('longitude'), data.get('notes'), data.get('user_name')
             ))
@@ -140,17 +142,18 @@ def update_unit_status_unified(unit_id):
             conn.commit()
             
             # Prepare response message
-            message = f"Unit {unit_id} status updated to {new_status}"
-            if percentage_complete == 100 and current_status == 'operating':
-                message += f" (division completed automatically)"
+            if auto_transitioned:
+                message = f"Division completed! Unit {unit_id} status updated to {new_status}"
+            else:
+                message = f"Unit {unit_id} status updated to {new_status}"
             
-            logger.info(message)
+            logger.info(f"Status update complete: {message}")
             return jsonify({
                 "success": True,
                 "message": message,
                 "new_status": new_status,
                 "division_id": division_id,
-                "auto_transitioned": current_status != new_status and new_status == 'recovering'
+                "auto_transitioned": auto_transitioned
             })
             
     except Exception as e:
