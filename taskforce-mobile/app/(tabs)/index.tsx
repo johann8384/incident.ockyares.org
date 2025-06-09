@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Alert,
   RefreshControl,
+  Platform,
 } from 'react-native';
 import { router } from 'expo-router';
 import { ThemedText } from '@/components/ThemedText';
@@ -30,7 +31,18 @@ export default function IncidentListScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const API_BASE_URL = 'http://localhost:5000'; // TODO: Make configurable
+  // Use different URLs for different platforms
+  const getApiUrl = () => {
+    if (Platform.OS === 'android') {
+      return 'http://10.0.2.2'; // Android emulator special IP
+    } else if (Platform.OS === 'ios') {
+      return 'http://localhost'; // iOS simulator can use localhost
+    } else {
+      return 'http://localhost'; // Web/other platforms
+    }
+  };
+
+  const API_BASE_URL = getApiUrl();
 
   const fetchIncidents = async (isRefresh = false) => {
     if (isRefresh) {
@@ -40,6 +52,7 @@ export default function IncidentListScreen() {
     }
 
     try {
+      console.log('Fetching from:', `${API_BASE_URL}/api/incidents/active`);
       const response = await fetch(`${API_BASE_URL}/api/incidents/active`);
       const data = await response.json();
       
@@ -50,7 +63,10 @@ export default function IncidentListScreen() {
       }
     } catch (error) {
       console.error('Error fetching incidents:', error);
-      Alert.alert('Error', 'Failed to connect to server');
+      Alert.alert(
+        'Connection Error', 
+        `Failed to connect to server at ${API_BASE_URL}. Make sure the Flask app is running.`
+      );
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -123,6 +139,7 @@ export default function IncidentListScreen() {
       <ThemedView style={styles.centered}>
         <ActivityIndicator size="large" color="#007bff" />
         <ThemedText style={styles.loadingText}>Loading incidents...</ThemedText>
+        <Text style={styles.debugText}>Connecting to: {API_BASE_URL}</Text>
       </ThemedView>
     );
   }
@@ -132,6 +149,7 @@ export default function IncidentListScreen() {
       <ThemedView style={styles.header}>
         <ThemedText type="title">Active Incidents</ThemedText>
         <ThemedText type="subtitle">Select an incident to check in</ThemedText>
+        <Text style={styles.debugText}>API: {API_BASE_URL}</Text>
       </ThemedView>
 
       {incidents.length === 0 ? (
@@ -177,6 +195,12 @@ const styles = StyleSheet.create({
     marginTop: 10,
     fontSize: 16,
     color: '#666',
+  },
+  debugText: {
+    fontSize: 12,
+    color: '#888',
+    marginTop: 5,
+    fontStyle: 'italic',
   },
   list: {
     flex: 1,
