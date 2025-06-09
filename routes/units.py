@@ -131,6 +131,57 @@ def update_unit_status_unified(unit_id):
         return jsonify({"error": str(e)}), 500
 
 
+@units_bp.route("/unit/<unit_id>/divisions", methods=["GET"])
+@log_request_data
+def get_unit_divisions(unit_id):
+    """Get divisions available for a specific unit (currently assigned + unassigned divisions)"""
+    incident_id = request.args.get('incident_id')
+    if not incident_id:
+        return jsonify({"error": "incident_id parameter is required"}), 400
+    
+    try:
+        with db_manager.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Get divisions that are either:
+            # 1. Currently assigned to this unit
+            # 2. Unassigned (available for assignment)
+            cursor.execute("""
+                SELECT division_id, division_name, status, assigned_unit_id, priority,
+                       ST_AsGeoJSON(division_polygon) as polygon_geojson
+                FROM search_divisions 
+                WHERE incident_id = %s 
+                AND (assigned_unit_id = %s OR assigned_unit_id IS NULL)
+                ORDER BY 
+                    CASE WHEN assigned_unit_id = %s THEN 0 ELSE 1 END,  -- Show assigned divisions first
+                    priority DESC,
+                    division_name
+            """, (incident_id, unit_id, unit_id))
+            
+            divisions = []
+            for row in cursor.fetchall():
+                divisions.append({
+                    'division_id': row[0],
+                    'division_name': row[1],
+                    'status': row[2],
+                    'assigned_unit_id': row[3],
+                    'priority': row[4],
+                    'polygon_geojson': row[5],
+                    'is_assigned_to_unit': row[3] == unit_id
+                })
+            
+            logger.info(f"Retrieved {len(divisions)} divisions for unit {unit_id} in incident {incident_id}")
+            return jsonify({
+                "success": True,
+                "divisions": divisions,
+                "count": len(divisions)
+            })
+            
+    except Exception as e:
+        logger.error(f"Error getting divisions for unit {unit_id}: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
 @units_bp.route("/incident/<incident_id>/units", methods=["GET"])
 @log_request_data
 def get_incident_units(incident_id):
