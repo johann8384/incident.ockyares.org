@@ -1,75 +1,343 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
-
-import { HelloWave } from '@/components/HelloWave';
-import ParallaxScrollView from '@/components/ParallaxScrollView';
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  ScrollView,
+  StyleSheet,
+  Alert,
+  Switch,
+  ActivityIndicator,
+} from 'react-native';
+import * as Location from 'expo-location';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 
-export default function HomeScreen() {
+interface UnitCheckinData {
+  unitId: string;
+  companyOfficer: string;
+  personnel: string;
+  bsarTech: boolean;
+  notes: string;
+  latitude: number | null;
+  longitude: number | null;
+}
+
+export default function UnitCheckinScreen() {
+  const [formData, setFormData] = useState<UnitCheckinData>({
+    unitId: '',
+    companyOfficer: '',
+    personnel: '',
+    bsarTech: false,
+    notes: '',
+    latitude: null,
+    longitude: null,
+  });
+  
+  const [loading, setLoading] = useState(false);
+  const [locationLoading, setLocationLoading] = useState(false);
+  const [incidentId] = useState('12345'); // TODO: Get from route params or context
+
+  const getCurrentLocation = async () => {
+    setLocationLoading(true);
+    try {
+      let { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission denied', 'Location permission is required for unit checkin');
+        return;
+      }
+
+      let location = await Location.getCurrentPositionAsync({});
+      setFormData(prev => ({
+        ...prev,
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+      }));
+      
+      Alert.alert('Success', 'Location captured successfully');
+    } catch (error) {
+      Alert.alert('Error', 'Failed to get current location');
+    } finally {
+      setLocationLoading(false);
+    }
+  };
+
+  const clearLocation = () => {
+    setFormData(prev => ({
+      ...prev,
+      latitude: null,
+      longitude: null,
+    }));
+  };
+
+  const validateForm = (): boolean => {
+    if (!formData.unitId.trim()) {
+      Alert.alert('Validation Error', 'Unit ID is required');
+      return false;
+    }
+    if (!formData.companyOfficer.trim()) {
+      Alert.alert('Validation Error', 'Company Officer is required');
+      return false;
+    }
+    if (!formData.personnel.trim() || parseInt(formData.personnel) < 1) {
+      Alert.alert('Validation Error', 'Number of personnel must be at least 1');
+      return false;
+    }
+    return true;
+  };
+
+  const handleSubmit = async () => {
+    if (!validateForm()) return;
+
+    setLoading(true);
+    try {
+      // TODO: Replace with actual API call
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate API call
+      
+      Alert.alert(
+        'Success',
+        `Unit ${formData.unitId} has been successfully checked in.`,
+        [
+          {
+            text: 'Check In Another Unit',
+            onPress: () => {
+              setFormData({
+                unitId: '',
+                companyOfficer: '',
+                personnel: '',
+                bsarTech: false,
+                notes: '',
+                latitude: null,
+                longitude: null,
+              });
+            }
+          },
+          {
+            text: 'Return to Incident',
+            onPress: () => {
+              // TODO: Navigate to incident view
+              console.log('Navigate to incident:', incidentId);
+            }
+          }
+        ]
+      );
+    } catch (error) {
+      Alert.alert('Error', 'Failed to check in unit. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const formatLocation = () => {
+    if (formData.latitude && formData.longitude) {
+      return `${formData.latitude.toFixed(6)}, ${formData.longitude.toFixed(6)}`;
+    }
+    return 'No location set';
+  };
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
+    <ScrollView style={styles.container}>
+      <ThemedView style={styles.header}>
+        <ThemedText type="title">Unit Checkin</ThemedText>
+        <ThemedText type="subtitle">Incident: {incidentId}</ThemedText>
       </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
+
+      <ThemedView style={styles.form}>
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Unit ID</Text>
+          <TextInput
+            style={styles.input}
+            value={formData.unitId}
+            onChangeText={(text) => setFormData(prev => ({ ...prev, unitId: text }))}
+            placeholder="e.g., 4534"
+            autoCapitalize="characters"
+          />
+        </View>
+
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Company Officer</Text>
+          <TextInput
+            style={styles.input}
+            value={formData.companyOfficer}
+            onChangeText={(text) => setFormData(prev => ({ ...prev, companyOfficer: text }))}
+            placeholder="e.g., Jones"
+            autoCapitalize="words"
+          />
+        </View>
+
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Number of Personnel</Text>
+          <TextInput
+            style={styles.input}
+            value={formData.personnel}
+            onChangeText={(text) => setFormData(prev => ({ ...prev, personnel: text }))}
+            placeholder="1"
+            keyboardType="numeric"
+          />
+        </View>
+
+        <View style={styles.switchGroup}>
+          <Text style={styles.label}>BSAR Tech</Text>
+          <Switch
+            value={formData.bsarTech}
+            onValueChange={(value) => setFormData(prev => ({ ...prev, bsarTech: value }))}
+          />
+        </View>
+
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Current Location</Text>
+          <View style={styles.locationControls}>
+            <TouchableOpacity
+              style={[styles.button, styles.primaryButton]}
+              onPress={getCurrentLocation}
+              disabled={locationLoading}
+            >
+              {locationLoading ? (
+                <ActivityIndicator color="white" />
+              ) : (
+                <Text style={styles.buttonText}>📍 Get Device Location</Text>
+              )}
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[styles.button, styles.secondaryButton]}
+              onPress={clearLocation}
+            >
+              <Text style={styles.secondaryButtonText}>Clear Location</Text>
+            </TouchableOpacity>
+          </View>
+          
+          <Text style={styles.locationDisplay}>
+            {formatLocation()}
+          </Text>
+          
+          <Text style={styles.locationHelp}>
+            🟢 Green marker = Incident Location | 🔵 Blue marker = Unit Location
+          </Text>
+        </View>
+
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Notes (Optional)</Text>
+          <TextInput
+            style={[styles.input, styles.textArea]}
+            value={formData.notes}
+            onChangeText={(text) => setFormData(prev => ({ ...prev, notes: text }))}
+            placeholder="Additional information..."
+            multiline
+            numberOfLines={3}
+          />
+        </View>
+
+        <TouchableOpacity
+          style={[styles.button, styles.submitButton]}
+          onPress={handleSubmit}
+          disabled={loading}
+        >
+          {loading ? (
+            <ActivityIndicator color="white" />
+          ) : (
+            <Text style={styles.buttonText}>Check In Unit</Text>
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.button, styles.secondaryButton]}
+          onPress={() => {
+            // TODO: Navigate back to incident
+            console.log('Navigate back to incident:', incidentId);
+          }}
+        >
+          <Text style={styles.secondaryButtonText}>Back to Incident</Text>
+        </TouchableOpacity>
       </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
+  container: {
+    flex: 1,
+    backgroundColor: '#f5f5f5',
+  },
+  header: {
+    padding: 20,
+    backgroundColor: 'white',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  form: {
+    padding: 20,
+  },
+  inputGroup: {
+    marginBottom: 20,
+  },
+  switchGroup: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    gap: 8,
+    marginBottom: 20,
+    paddingVertical: 10,
   },
-  stepContainer: {
-    gap: 8,
+  label: {
+    fontSize: 16,
+    fontWeight: '600',
     marginBottom: 8,
+    color: '#333',
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  input: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    backgroundColor: 'white',
+  },
+  textArea: {
+    height: 80,
+    textAlignVertical: 'top',
+  },
+  locationControls: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 10,
+  },
+  button: {
+    flex: 1,
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  primaryButton: {
+    backgroundColor: '#007bff',
+  },
+  secondaryButton: {
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: '#6c757d',
+  },
+  submitButton: {
+    backgroundColor: '#007bff',
+    marginBottom: 10,
+  },
+  buttonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  secondaryButtonText: {
+    color: '#6c757d',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  locationDisplay: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 5,
+  },
+  locationHelp: {
+    fontSize: 12,
+    color: '#888',
   },
 });
