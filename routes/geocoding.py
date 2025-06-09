@@ -7,13 +7,13 @@ from routes.common import log_request_data, validate_coordinates
 from services.geocoding import GeocodingService
 
 logger = logging.getLogger(__name__)
-geocode_bp = Blueprint('geocoding', __name__, url_prefix='/api')
+geocoding_bp = Blueprint('geocoding', __name__, url_prefix='/api')
 
 # Initialize geocoding service
-geocode_service = GeocodingService()
+geocoding_service = GeocodingService()
 
 
-@geocode_bp.route("/geocode/reverse", methods=["POST"])
+@geocoding_bp.route("/geocode/reverse", methods=["POST"])
 @log_request_data
 def reverse_geocode():
     """Reverse geocode coordinates to address using GeocodingService"""
@@ -27,7 +27,7 @@ def reverse_geocode():
     latitude, longitude = coords
     
     # Use GeocodingService instead of direct API call
-    result = geocode_service.reverse_geocode(latitude, longitude)
+    result = geocoding_service.reverse_geocode(latitude, longitude)
 
     if result["success"]:
         logger.info(f"Successful reverse geocode: {latitude},{longitude} -> {result.get('address')}")
@@ -45,7 +45,7 @@ def reverse_geocode():
         return jsonify({"success": False, "error": result["error"]}), 500
 
 
-@geocode_bp.route("/geocode/forward", methods=["POST"])
+@geocoding_bp.route("/geocode/forward", methods=["POST"])
 @log_request_data
 def forward_geocode():
     """Forward geocode address to coordinates using GeocodingService"""
@@ -57,7 +57,7 @@ def forward_geocode():
         return jsonify({"error": "Address is required"}), 400
 
     # Use GeocodingService for forward geocoding
-    result = geocode_service.forward_geocode(address)
+    result = geocoding_service.forward_geocode(address)
 
     if result["success"]:
         logger.info(f"Successful forward geocode: {address} -> {result['count']} results")
