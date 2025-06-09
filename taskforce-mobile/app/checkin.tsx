@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,7 +10,9 @@ import {
   Switch,
   ActivityIndicator,
   Platform,
+  Dimensions,
 } from 'react-native';
+import { WebView } from 'react-native-webview';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -30,6 +32,8 @@ export default function UnitCheckinScreen() {
   const incidentId = params.incidentId as string;
   const incidentName = params.incidentName as string;
   const incidentAddress = params.incidentAddress as string;
+  const incidentLat = params.incidentLat ? parseFloat(params.incidentLat as string) : null;
+  const incidentLng = params.incidentLng ? parseFloat(params.incidentLng as string) : null;
 
   const [formData, setFormData] = useState<UnitCheckinData>({
     unitId: '',
@@ -43,6 +47,8 @@ export default function UnitCheckinScreen() {
   
   const [loading, setLoading] = useState(false);
   const [locationLoading, setLocationLoading] = useState(false);
+  const [showMap, setShowMap] = useState(false);
+  const webViewRef = useRef<WebView>(null);
 
   // Use different URLs for different platforms
   const getApiUrl = () => {
@@ -57,6 +63,191 @@ export default function UnitCheckinScreen() {
 
   const API_BASE_URL = getApiUrl();
 
+  // Generate the HTML for the map
+  const generateMapHTML = () => {
+    const defaultLat = incidentLat || 38.3960874; // Louisville, KY fallback
+    const defaultLng = incidentLng || -85.4425145;
+    const unitLat = formData.latitude || defaultLat;
+    const unitLng = formData.longitude || defaultLng;
+
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Unit Location Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" 
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin=""/>
+    <style>
+        body { margin: 0; padding: 0; }
+        #map { height: 100vh; width: 100vw; }
+        .map-controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+            background: white;
+            padding: 5px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        .control-btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            margin: 2px;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .control-btn:hover {
+            background: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <div class="map-controls">
+        <button class="control-btn" onclick="centerOnIncident()">📍 Incident</button>
+        <button class="control-btn" onclick="getCurrentLocation()">📱 My Location</button>
+        <button class="control-btn" onclick="setUnitLocation()">✅ Set Location</button>
+    </div>
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+            crossorigin=""></script>
+    <script>
+        var map = L.map('map').setView([${defaultLat}, ${defaultLng}], 13);
+        
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        // Incident marker (red)
+        ${incidentLat && incidentLng ? `
+        var incidentIcon = L.icon({
+            iconUrl: 'data:image/svg+xml;base64,' + btoa(\`
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#dc3545" width="32" height="32">
+                    <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+                </svg>
+            \`),
+            iconSize: [32, 32],
+            iconAnchor: [16, 32]
+        });
+        
+        var incidentMarker = L.marker([${incidentLat}, ${incidentLng}], { icon: incidentIcon })
+            .addTo(map)
+            .bindPopup('<b>Incident Location</b><br>${incidentName}<br>${incidentAddress}');
+        ` : ''}
+
+        // Unit marker (blue) - draggable
+        var unitIcon = L.icon({
+            iconUrl: 'data:image/svg+xml;base64,' + btoa(\`
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#0d6efd" width="32" height="32">
+                    <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+                </svg>
+            \`),
+            iconSize: [32, 32],
+            iconAnchor: [16, 32]
+        });
+
+        var unitMarker = L.marker([${unitLat}, ${unitLng}], { 
+            icon: unitIcon,
+            draggable: true
+        }).addTo(map).bindPopup('<b>Unit Location</b><br>Drag to set position');
+
+        // Handle marker drag
+        unitMarker.on('dragend', function(e) {
+            var position = e.target.getLatLng();
+            updateUnitLocation(position.lat, position.lng);
+        });
+
+        // Handle map click to set unit location
+        map.on('click', function(e) {
+            unitMarker.setLatLng(e.latlng);
+            updateUnitLocation(e.latlng.lat, e.latlng.lng);
+        });
+
+        function updateUnitLocation(lat, lng) {
+            // Send location back to React Native
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'locationUpdate',
+                latitude: lat,
+                longitude: lng
+            }));
+        }
+
+        function centerOnIncident() {
+            ${incidentLat && incidentLng ? `
+            map.setView([${incidentLat}, ${incidentLng}], 15);
+            ` : `
+            alert('No incident location available');
+            `}
+        }
+
+        function getCurrentLocation() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(function(position) {
+                    var lat = position.coords.latitude;
+                    var lng = position.coords.longitude;
+                    unitMarker.setLatLng([lat, lng]);
+                    map.setView([lat, lng], 16);
+                    updateUnitLocation(lat, lng);
+                }, function(error) {
+                    alert('Error getting location: ' + error.message);
+                });
+            } else {
+                alert('Geolocation is not supported');
+            }
+        }
+
+        function setUnitLocation() {
+            var position = unitMarker.getLatLng();
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'setLocation',
+                latitude: position.lat,
+                longitude: position.lng
+            }));
+        }
+
+        // Fit map to show both markers if both exist
+        ${incidentLat && incidentLng ? `
+        if (${formData.latitude} && ${formData.longitude}) {
+            var group = new L.featureGroup([incidentMarker, unitMarker]);
+            map.fitBounds(group.getBounds().pad(0.1));
+        }
+        ` : ''}
+    </script>
+</body>
+</html>
+    `;
+  };
+
+  const handleWebViewMessage = (event: any) => {
+    try {
+      const data = JSON.parse(event.nativeEvent.data);
+      if (data.type === 'locationUpdate') {
+        setFormData(prev => ({
+          ...prev,
+          latitude: data.latitude,
+          longitude: data.longitude,
+        }));
+      } else if (data.type === 'setLocation') {
+        setFormData(prev => ({
+          ...prev,
+          latitude: data.latitude,
+          longitude: data.longitude,
+        }));
+        Alert.alert('Location Set', `Unit location set to: ${data.latitude.toFixed(6)}, ${data.longitude.toFixed(6)}`);
+      }
+    } catch (error) {
+      console.error('Error parsing WebView message:', error);
+    }
+  };
+
   const getCurrentLocation = async () => {
     setLocationLoading(true);
     try {
@@ -65,8 +256,8 @@ export default function UnitCheckinScreen() {
         setTimeout(() => {
           setFormData(prev => ({
             ...prev,
-            latitude: 37.7749, // San Francisco coordinates as example
-            longitude: -122.4194,
+            latitude: incidentLat || 37.7749, // Use incident location or San Francisco as fallback
+            longitude: incidentLng || -122.4194,
           }));
           Alert.alert('Success', 'Mock location set for testing');
           setLocationLoading(false);
@@ -166,6 +357,7 @@ export default function UnitCheckinScreen() {
                   latitude: null,
                   longitude: null,
                 });
+                setShowMap(false);
               }
             },
             {
@@ -194,6 +386,45 @@ export default function UnitCheckinScreen() {
     }
     return 'No location set';
   };
+
+  const toggleMap = () => {
+    setShowMap(!showMap);
+  };
+
+  if (showMap) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.mapHeader}>
+          <TouchableOpacity
+            style={[styles.button, styles.secondaryButton]}
+            onPress={toggleMap}
+          >
+            <Text style={styles.secondaryButtonText}>← Back to Form</Text>
+          </TouchableOpacity>
+          <Text style={styles.mapTitle}>Set Unit Location</Text>
+          <Text style={styles.mapSubtitle}>Tap on map or drag blue marker</Text>
+        </View>
+        
+        <WebView
+          ref={webViewRef}
+          source={{ html: generateMapHTML() }}
+          style={styles.webView}
+          onMessage={handleWebViewMessage}
+          javaScriptEnabled={true}
+          domStorageEnabled={true}
+          geolocationEnabled={true}
+          allowsInlineMediaPlayback={true}
+          mediaPlaybackRequiresUserAction={false}
+        />
+        
+        <View style={styles.mapFooter}>
+          <Text style={styles.locationDisplay}>
+            Current: {formatLocation()}
+          </Text>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <ScrollView style={styles.container}>
@@ -252,7 +483,15 @@ export default function UnitCheckinScreen() {
         </View>
 
         <View style={styles.inputGroup}>
-          <Text style={styles.label}>Current Location</Text>
+          <Text style={styles.label}>Unit Location</Text>
+          
+          <TouchableOpacity
+            style={[styles.button, styles.mapButton]}
+            onPress={toggleMap}
+          >
+            <Text style={styles.buttonText}>🗺️ Open Map to Set Location</Text>
+          </TouchableOpacity>
+          
           <View style={styles.locationControls}>
             <TouchableOpacity
               style={[styles.button, styles.primaryButton]}
@@ -262,7 +501,7 @@ export default function UnitCheckinScreen() {
               {locationLoading ? (
                 <ActivityIndicator color="white" />
               ) : (
-                <Text style={styles.buttonText}>📍 Get Device Location</Text>
+                <Text style={styles.buttonText}>📍 Use Current Location</Text>
               )}
             </TouchableOpacity>
             
@@ -279,7 +518,7 @@ export default function UnitCheckinScreen() {
           </Text>
           
           <Text style={styles.locationHelp}>
-            🟢 Green marker = Incident Location | 🔵 Blue marker = Unit Location
+            🔴 Red marker = Incident Location | 🔵 Blue marker = Unit Location
           </Text>
         </View>
 
@@ -380,6 +619,7 @@ const styles = StyleSheet.create({
   locationControls: {
     flexDirection: 'row',
     gap: 10,
+    marginTop: 10,
     marginBottom: 10,
   },
   button: {
@@ -396,6 +636,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     borderWidth: 1,
     borderColor: '#6c757d',
+  },
+  mapButton: {
+    backgroundColor: '#28a745',
+    marginBottom: 10,
   },
   submitButton: {
     backgroundColor: '#007bff',
@@ -419,5 +663,34 @@ const styles = StyleSheet.create({
   locationHelp: {
     fontSize: 12,
     color: '#888',
+  },
+  // Map view styles
+  mapHeader: {
+    backgroundColor: 'white',
+    padding: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  mapTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+    textAlign: 'center',
+    marginTop: 10,
+  },
+  mapSubtitle: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+    marginTop: 5,
+  },
+  webView: {
+    flex: 1,
+  },
+  mapFooter: {
+    backgroundColor: 'white',
+    padding: 15,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
   },
 });
