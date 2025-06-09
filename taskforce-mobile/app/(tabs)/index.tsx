@@ -87,7 +87,9 @@ export default function IncidentListScreen() {
       params: { 
         incidentId: incident.incident_id,
         incidentName: incident.name,
-        incidentAddress: incident.address 
+        incidentAddress: incident.address,
+        incidentLat: incident.latitude?.toString() || '',
+        incidentLng: incident.longitude?.toString() || ''
       }
     });
   };
@@ -100,6 +102,13 @@ export default function IncidentListScreen() {
       hour: '2-digit',
       minute: '2-digit'
     });
+  };
+
+  const formatLocation = (lat: number, lng: number) => {
+    if (lat && lng) {
+      return `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+    }
+    return 'No location';
   };
 
   const renderIncident = ({ item }: { item: Incident }) => (
@@ -119,6 +128,12 @@ export default function IncidentListScreen() {
       {item.address && (
         <Text style={styles.address} numberOfLines={2}>
           📍 {item.address}
+        </Text>
+      )}
+
+      {item.latitude && item.longitude && (
+        <Text style={styles.coordinates}>
+          🌐 {formatLocation(item.latitude, item.longitude)}
         </Text>
       )}
       
@@ -253,8 +268,14 @@ const styles = StyleSheet.create({
   address: {
     fontSize: 14,
     color: '#666',
-    marginBottom: 8,
+    marginBottom: 6,
     lineHeight: 20,
+  },
+  coordinates: {
+    fontSize: 12,
+    color: '#888',
+    marginBottom: 8,
+    fontFamily: 'monospace',
   },
   date: {
     fontSize: 12,
