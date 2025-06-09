@@ -752,7 +752,7 @@ def get_incident(incident_id):
 @app.route("/api/incidents/active", methods=["GET"])
 @log_request_data
 def get_active_incidents():
-    """Get all incidents with status 'Active'"""
+    """Get all incidents with status 'active'"""
     try:
         with db_manager.get_connection() as conn:
             cursor = conn.cursor()
@@ -763,7 +763,7 @@ def get_active_incidents():
                        ST_Y(incident_location) as longitude, 
                        address, status, created_at
                 FROM incidents 
-                WHERE status = 'Active'
+                WHERE status = 'active'
                 ORDER BY created_at DESC
             """)
             
