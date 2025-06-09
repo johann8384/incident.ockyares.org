@@ -571,111 +571,6 @@ def get_unit_history(unit_id):
     })
 
 
-# BACKWARD COMPATIBILITY ENDPOINTS
-
-@app.route("/api/unit/checkin", methods=["POST"])
-@log_request_data
-def unit_checkin_api():
-    """
-    Backward compatibility endpoint for unit check-in
-    Redirects to unified status update with staging status
-    """
-    data = request.get_json()
-    
-    # Check if incident exists first
-    incident = Incident.get_incident_by_id(data.get("incident_id"), db_manager)
-    if not incident:
-        logger.warning(f"Unit checkin attempted for non-existent incident: {data.get('incident_id')}")
-        return jsonify({"error": "Incident not found"}), 404
-
-    logger.info(f"Unit {data.get('unit_id')} checking in to incident {data.get('incident_id')}")
-
-    # Map old checkin fields to new status update format
-    status_data = {
-        'incident_id': data.get('incident_id'),
-        'new_status': 'staging',  # Check-in is staging status
-        'unit_name': data.get('unit_id'),  # Use unit_id as name if no name provided
-        'unit_type': data.get('unit_type', 'Unknown'),
-        'unit_leader': data.get('company_officer'),
-        'contact_info': data.get('contact_info'),
-        'number_of_personnel': data.get('number_of_personnel'),
-        'bsar_tech': data.get('bsar_tech', False),
-        'latitude': data.get('latitude'),
-        'longitude': data.get('longitude'),
-        'notes': data.get('notes', 'Unit checked in'),
-        'user_name': data.get('company_officer')
-    }
-    
-    # Create unit and update status
-    unit = Unit()
-    unit.unit_id = data.get('unit_id')
-    result = unit.update_status(**status_data)
-    
-    if result["success"]:
-        logger.info(f"Unit checkin successful: {data.get('unit_id')}")
-        return jsonify({
-            "success": True,
-            "unit_id": data.get('unit_id'),
-            "message": result["message"]
-        })
-    else:
-        logger.error(f"Unit checkin failed: {result['error']}")
-        return jsonify({"error": result["error"]}), 400
-
-
-# EXISTING INCIDENT ENDPOINTS
-
-@app.route("/api/incident", methods=["POST"])
-@log_request_data
-def create_incident():
-    """Create new incident with full data including location, hospitals, and divisions"""
-    data = request.get_json()
-
-    # Validate required fields
-    if not data.get("name") or not data.get("incident_type"):
-        logger.warning("Incident creation attempted without required fields")
-        return jsonify({"error": "Name and incident type are required"}), 400
-
-    logger.info(f"Creating incident: {data.get('name')} ({data.get('incident_type')})")
-
-    # Create incident with all available data
-    incident = Incident(db_manager)
-    incident_id = incident.create_incident(
-        name=data["name"],
-        incident_type=data["incident_type"],
-        description=data.get("description", ""),
-        latitude=data.get("latitude"),
-        longitude=data.get("longitude"),
-        address=data.get("address"),
-        hospital_data=data.get("hospital_data"),
-        search_area_coordinates=data.get("search_area_coordinates"),
-        divisions=data.get("divisions"),  # Save divisions if provided
-    )
-
-    logger.info(f"Incident created successfully: {incident_id}")
-    return jsonify(
-        {
-            "success": True,
-            "incident_id": incident_id,
-            "message": "Incident created successfully",
-        }
-    )
-
-
-@app.route("/api/incident/<incident_id>", methods=["GET"])
-@log_request_data
-def get_incident(incident_id):
-    """Get incident details including hospitals and divisions"""
-    incident = Incident.get_incident_by_id(incident_id, db_manager)
-    if not incident:
-        logger.warning(f"Attempt to retrieve non-existent incident: {incident_id}")
-        return jsonify({"error": "Incident not found"}), 404
-
-    incident_data = incident.get_incident_data()
-    logger.info(f"Retrieved incident data for: {incident_id}")
-    return jsonify({"success": True, "incident": incident_data})
-
-
 @app.route("/api/incident/<incident_id>/location", methods=["POST"])
 @log_request_data
 def set_incident_location(incident_id):
@@ -801,6 +696,151 @@ def get_divisions(incident_id):
     return jsonify(
         {"success": True, "divisions": divisions, "count": len(divisions)}
     )
+
+
+@app.route("/api/incident", methods=["POST"])
+@log_request_data
+def create_incident():
+    """Create new incident with full data including location, hospitals, and divisions"""
+    data = request.get_json()
+
+    # Validate required fields
+    if not data.get("name") or not data.get("incident_type"):
+        logger.warning("Incident creation attempted without required fields")
+        return jsonify({"error": "Name and incident type are required"}), 400
+
+    logger.info(f"Creating incident: {data.get('name')} ({data.get('incident_type')})")
+
+    # Create incident with all available data
+    incident = Incident(db_manager)
+    incident_id = incident.create_incident(
+        name=data["name"],
+        incident_type=data["incident_type"],
+        description=data.get("description", ""),
+        latitude=data.get("latitude"),
+        longitude=data.get("longitude"),
+        address=data.get("address"),
+        hospital_data=data.get("hospital_data"),
+        search_area_coordinates=data.get("search_area_coordinates"),
+        divisions=data.get("divisions"),  # Save divisions if provided
+    )
+
+    logger.info(f"Incident created successfully: {incident_id}")
+    return jsonify(
+        {
+            "success": True,
+            "incident_id": incident_id,
+            "message": "Incident created successfully",
+        }
+    )
+
+
+@app.route("/api/incident/<incident_id>", methods=["GET"])
+@log_request_data
+def get_incident(incident_id):
+    """Get incident details including hospitals and divisions"""
+    incident = Incident.get_incident_by_id(incident_id, db_manager)
+    if not incident:
+        logger.warning(f"Attempt to retrieve non-existent incident: {incident_id}")
+        return jsonify({"error": "Incident not found"}), 404
+
+    incident_data = incident.get_incident_data()
+    logger.info(f"Retrieved incident data for: {incident_id}")
+    return jsonify({"success": True, "incident": incident_data})
+
+
+@app.route("/api/incidents/active", methods=["GET"])
+@log_request_data
+def get_active_incidents():
+    """Get all incidents with status 'active'"""
+    try:
+        with db_manager.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT incident_id, name, incident_type, description, 
+                       ST_X(incident_location) as latitude, 
+                       ST_Y(incident_location) as longitude, 
+                       address, status, created_at
+                FROM incidents 
+                WHERE status = 'active'
+                ORDER BY created_at DESC
+            """)
+            
+            incidents = []
+            for row in cursor.fetchall():
+                incidents.append({
+                    'incident_id': row[0],
+                    'name': row[1],
+                    'incident_type': row[2],
+                    'description': row[3] or '',
+                    'latitude': float(row[4]) if row[4] else None,
+                    'longitude': float(row[5]) if row[5] else None,
+                    'address': row[6] or '',
+                    'status': row[7],
+                    'created_at': row[8].isoformat() if row[8] else None
+                })
+            
+            logger.info(f"Retrieved {len(incidents)} active incidents")
+            return jsonify({
+                "success": True,
+                "incidents": incidents,
+                "count": len(incidents)
+            })
+            
+    except Exception as e:
+        logger.error(f"Error getting active incidents: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/unit/checkin", methods=["POST"])
+@log_request_data
+def unit_checkin_api():
+    """
+    Backward compatibility endpoint for unit check-in
+    Redirects to unified status update with staging status
+    """
+    data = request.get_json()
+    
+    # Check if incident exists first
+    incident = Incident.get_incident_by_id(data.get("incident_id"), db_manager)
+    if not incident:
+        logger.warning(f"Unit checkin attempted for non-existent incident: {data.get('incident_id')}")
+        return jsonify({"error": "Incident not found"}), 404
+
+    logger.info(f"Unit {data.get('unit_id')} checking in to incident {data.get('incident_id')}")
+
+    # Map old checkin fields to new status update format
+    status_data = {
+        'incident_id': data.get('incident_id'),
+        'new_status': 'staging',  # Check-in is staging status
+        'unit_name': data.get('unit_id'),  # Use unit_id as name if no name provided
+        'unit_type': data.get('unit_type', 'Unknown'),
+        'unit_leader': data.get('company_officer'),
+        'contact_info': data.get('contact_info'),
+        'number_of_personnel': data.get('number_of_personnel'),
+        'bsar_tech': data.get('bsar_tech', False),
+        'latitude': data.get('latitude'),
+        'longitude': data.get('longitude'),
+        'notes': data.get('notes', 'Unit checked in'),
+        'user_name': data.get('company_officer')
+    }
+    
+    # Create unit and update status
+    unit = Unit()
+    unit.unit_id = data.get('unit_id')
+    result = unit.update_status(**status_data)
+    
+    if result["success"]:
+        logger.info(f"Unit checkin successful: {data.get('unit_id')}")
+        return jsonify({
+            "success": True,
+            "unit_id": data.get('unit_id'),
+            "message": result["message"]
+        })
+    else:
+        logger.error(f"Unit checkin failed: {result['error']}")
+        return jsonify({"error": result["error"]}), 400
 
 
 @app.route("/health")
