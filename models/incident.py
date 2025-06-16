@@ -6,8 +6,16 @@ from typing import Dict, List, Optional, Tuple
 import hashlib
 
 import requests
-from shapely.geometry import Point, Polygon, LineString, MultiLineString
+from shapely.geometry import Point, Polygon, LineString, MultiLineString, MultiPolygon
 from shapely.ops import unary_union, polygonize
+import numpy as np
+
+try:
+    from scipy.spatial import Voronoi
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+    print("Warning: scipy not available, will use PostGIS for Voronoi generation")
 
 from .database import DatabaseManager
 from .hospital import Hospital
@@ -130,13 +138,13 @@ class Incident:
             try:
                 road_data = self._fetch_road_data(polygon)
                 if road_data:
-                    divisions = self._create_road_aware_divisions_preview(
+                    divisions = self._create_voronoi_road_divisions_preview(
                         polygon, num_divisions, self.incident_location, road_data
                     )
                     if divisions:
                         return divisions
             except Exception as e:
-                print(f"Road-aware division failed, falling back to grid: {e}")
+                print(f"Voronoi road-aware division failed, falling back to grid: {e}")
 
             # Fallback to grid divisions
             divisions = self._create_grid_divisions_preview(
@@ -201,6 +209,282 @@ class Incident:
 
         except Exception as e:
             print(f"Failed to fetch road data: {e}")
+            return []
+
+    def _create_voronoi_road_divisions_preview(
+        self, polygon: Polygon, num_divisions: int, incident_location: Point = None, roads: List[LineString] = None
+    ) -> List[Dict]:
+        """Create road-aware divisions using Voronoi diagram with road-based seed points"""
+        try:
+            if not roads:
+                return []
+
+            print(f"Creating Voronoi road-aware divisions with {len(roads)} roads")
+            
+            # Step 1: Extract road centerlines and create seed points
+            seed_points = self._generate_road_seed_points(roads, polygon, num_divisions)
+            
+            if len(seed_points) < 2:
+                print("Not enough seed points for Voronoi diagram")
+                return []
+
+            print(f"Generated {len(seed_points)} seed points from roads")
+
+            # Step 2: Generate Voronoi diagram
+            voronoi_cells = self._generate_voronoi_cells(seed_points, polygon)
+            
+            if not voronoi_cells:
+                print("Failed to generate Voronoi cells")
+                return []
+
+            print(f"Generated {len(voronoi_cells)} Voronoi cells")
+
+            # Step 3: Create divisions from Voronoi cells
+            divisions = []
+            for i, cell in enumerate(voronoi_cells[:num_divisions]):
+                if i >= num_divisions:
+                    break
+                    
+                try:
+                    if hasattr(cell, 'exterior') and cell.area > 0.000001:
+                        coords = list(cell.exterior.coords)
+                        
+                        division_letter = chr(65 + i)
+                        division_name = f"Division {division_letter}"
+                        division_id = f"DIV-{division_letter}"
+
+                        priority = self._calculate_division_priority(
+                            cell, incident_location, divisions
+                        )
+
+                        divisions.append({
+                            "division_name": division_name,
+                            "division_id": division_id,
+                            "coordinates": coords,
+                            "estimated_area_m2": self._calculate_area_m2(cell),
+                            "status": "unassigned",
+                            "priority": priority,
+                            "search_type": "primary",
+                            "estimated_duration": "2 hours",
+                        })
+                        
+                except Exception as e:
+                    print(f"Error creating division from Voronoi cell: {e}")
+                    continue
+
+            # Step 4: If we need more divisions, subdivide existing ones
+            if len(divisions) < num_divisions and len(divisions) > 0:
+                print(f"Voronoi created {len(divisions)} divisions, need {num_divisions}. Subdividing...")
+                divisions = self._subdivide_divisions(divisions, num_divisions, polygon)
+
+            print(f"Successfully created {len(divisions)} Voronoi road-aware divisions")
+            return divisions
+
+        except Exception as e:
+            print(f"Voronoi road-aware division creation failed: {e}")
+            return []
+
+    def _generate_road_seed_points(self, roads: List[LineString], polygon: Polygon, target_divisions: int) -> List[Tuple[float, float]]:
+        """Generate evenly spaced seed points along road centerlines"""
+        try:
+            seed_points = []
+            
+            # Filter roads to only those significantly within our polygon
+            major_roads = []
+            for road in roads:
+                try:
+                    intersection = polygon.intersection(road)
+                    if isinstance(intersection, LineString) and intersection.length > 0.001:
+                        major_roads.append(intersection)
+                    elif hasattr(intersection, 'geoms'):
+                        for geom in intersection.geoms:
+                            if isinstance(geom, LineString) and geom.length > 0.001:
+                                major_roads.append(geom)
+                except Exception as e:
+                    print(f"Error filtering road: {e}")
+                    continue
+
+            if not major_roads:
+                return []
+
+            # Calculate total road length to determine point spacing
+            total_length = sum(road.length for road in major_roads)
+            
+            # Target spacing based on number of divisions desired
+            # Use more points than divisions to ensure good coverage
+            target_points = max(target_divisions * 2, 10)
+            spacing = total_length / target_points if total_length > 0 else 0.001
+
+            print(f"Total road length: {total_length:.6f}, target spacing: {spacing:.6f}")
+
+            # Place points along each road
+            for road in major_roads:
+                try:
+                    road_length = road.length
+                    if road_length <= 0:
+                        continue
+                        
+                    # Number of points for this road proportional to its length
+                    num_points_on_road = max(1, int(road_length / spacing))
+                    
+                    for i in range(num_points_on_road):
+                        # Calculate distance along the road
+                        distance = (i / max(1, num_points_on_road - 1)) * road_length if num_points_on_road > 1 else 0.5 * road_length
+                        
+                        # Get point at that distance
+                        point = road.interpolate(distance)
+                        if point and hasattr(point, 'x') and hasattr(point, 'y'):
+                            # Ensure point is within polygon
+                            if polygon.contains(point) or polygon.touches(point):
+                                seed_points.append((point.x, point.y))
+                                
+                except Exception as e:
+                    print(f"Error placing points on road: {e}")
+                    continue
+
+            # Add some boundary points to ensure good coverage at edges
+            bounds = polygon.bounds
+            boundary_points = [
+                (bounds[0] + (bounds[2] - bounds[0]) * 0.1, bounds[1] + (bounds[3] - bounds[1]) * 0.1),
+                (bounds[0] + (bounds[2] - bounds[0]) * 0.9, bounds[1] + (bounds[3] - bounds[1]) * 0.1),
+                (bounds[0] + (bounds[2] - bounds[0]) * 0.1, bounds[1] + (bounds[3] - bounds[1]) * 0.9),
+                (bounds[0] + (bounds[2] - bounds[0]) * 0.9, bounds[1] + (bounds[3] - bounds[1]) * 0.9),
+            ]
+            
+            for bp in boundary_points:
+                boundary_point = Point(bp)
+                if polygon.contains(boundary_point):
+                    seed_points.append(bp)
+
+            # Remove duplicate points
+            unique_points = []
+            tolerance = spacing / 10  # 10% of spacing
+            for point in seed_points:
+                is_duplicate = False
+                for existing in unique_points:
+                    if abs(point[0] - existing[0]) < tolerance and abs(point[1] - existing[1]) < tolerance:
+                        is_duplicate = True
+                        break
+                if not is_duplicate:
+                    unique_points.append(point)
+
+            print(f"Generated {len(unique_points)} unique seed points")
+            return unique_points
+
+        except Exception as e:
+            print(f"Error generating road seed points: {e}")
+            return []
+
+    def _generate_voronoi_cells(self, seed_points: List[Tuple[float, float]], polygon: Polygon) -> List[Polygon]:
+        """Generate Voronoi cells from seed points and clip to polygon boundary"""
+        try:
+            if len(seed_points) < 2:
+                return []
+
+            # Try scipy Voronoi first (faster and more reliable)
+            if SCIPY_AVAILABLE:
+                return self._generate_voronoi_cells_scipy(seed_points, polygon)
+            else:
+                return self._generate_voronoi_cells_postgis(seed_points, polygon)
+
+        except Exception as e:
+            print(f"Error generating Voronoi cells: {e}")
+            return []
+
+    def _generate_voronoi_cells_scipy(self, seed_points: List[Tuple[float, float]], polygon: Polygon) -> List[Polygon]:
+        """Generate Voronoi cells using scipy.spatial.Voronoi"""
+        try:
+            points = np.array(seed_points)
+            
+            # Create Voronoi diagram
+            vor = Voronoi(points)
+            
+            voronoi_polygons = []
+            
+            # Convert Voronoi regions to polygons
+            for region_idx in vor.regions:
+                if len(region_idx) >= 3 and -1 not in region_idx:  # Valid finite region
+                    try:
+                        # Get vertices for this region
+                        region_vertices = [vor.vertices[i] for i in region_idx]
+                        
+                        # Create polygon from vertices
+                        if len(region_vertices) >= 3:
+                            vor_poly = Polygon(region_vertices)
+                            
+                            # Clip to search area
+                            if polygon.intersects(vor_poly):
+                                clipped = polygon.intersection(vor_poly)
+                                
+                                if hasattr(clipped, 'area') and clipped.area > 0.000001:
+                                    if hasattr(clipped, 'exterior'):
+                                        voronoi_polygons.append(clipped)
+                                    elif hasattr(clipped, 'geoms'):
+                                        for geom in clipped.geoms:
+                                            if hasattr(geom, 'area') and geom.area > 0.000001 and hasattr(geom, 'exterior'):
+                                                voronoi_polygons.append(geom)
+                                                
+                    except Exception as e:
+                        print(f"Error processing Voronoi region: {e}")
+                        continue
+
+            # Sort by area (largest first) for consistent ordering
+            voronoi_polygons.sort(key=lambda p: p.area, reverse=True)
+            
+            print(f"Scipy Voronoi generated {len(voronoi_polygons)} valid cells")
+            return voronoi_polygons
+
+        except Exception as e:
+            print(f"Error in scipy Voronoi generation: {e}")
+            return []
+
+    def _generate_voronoi_cells_postgis(self, seed_points: List[Tuple[float, float]], polygon: Polygon) -> List[Polygon]:
+        """Generate Voronoi cells using PostGIS ST_VoronoiPolygons as fallback"""
+        try:
+            # Create points collection for PostGIS
+            points_wkt = "MULTIPOINT(" + ", ".join([f"({p[0]} {p[1]})" for p in seed_points]) + ")"
+            
+            # Get polygon boundary for clipping
+            polygon_wkt = polygon.wkt
+            
+            # Use PostGIS to generate Voronoi diagram
+            query = """
+            WITH voronoi_cells AS (
+                SELECT (ST_Dump(ST_VoronoiPolygons(ST_GeomFromText(%s, 4326)))).geom as cell_geom
+            )
+            SELECT ST_AsText(ST_Intersection(cell_geom, ST_GeomFromText(%s, 4326))) as clipped_geom
+            FROM voronoi_cells
+            WHERE ST_Intersects(cell_geom, ST_GeomFromText(%s, 4326))
+            AND ST_Area(ST_Intersection(cell_geom, ST_GeomFromText(%s, 4326))) > 0.000001
+            ORDER BY ST_Area(ST_Intersection(cell_geom, ST_GeomFromText(%s, 4326))) DESC
+            """
+            
+            result = self.db.execute_query(
+                query, 
+                (points_wkt, polygon_wkt, polygon_wkt, polygon_wkt, polygon_wkt), 
+                fetch=True
+            )
+            
+            voronoi_polygons = []
+            if result:
+                for row in result:
+                    try:
+                        wkt_geom = row[0]
+                        if wkt_geom and wkt_geom.startswith('POLYGON'):
+                            # Parse WKT back to Shapely polygon
+                            from shapely import wkt
+                            geom = wkt.loads(wkt_geom)
+                            if hasattr(geom, 'area') and geom.area > 0.000001:
+                                voronoi_polygons.append(geom)
+                    except Exception as e:
+                        print(f"Error parsing PostGIS Voronoi result: {e}")
+                        continue
+
+            print(f"PostGIS Voronoi generated {len(voronoi_polygons)} valid cells")
+            return voronoi_polygons
+
+        except Exception as e:
+            print(f"Error in PostGIS Voronoi generation: {e}")
             return []
 
     def _subdivide_divisions(self, divisions: List[Dict], target_count: int, search_area: Polygon) -> List[Dict]:
@@ -344,243 +628,6 @@ class Incident:
         except Exception as e:
             print(f"Error subdividing single division: {e}")
             return [division]
-
-    def _create_road_aware_divisions_preview(
-        self, polygon: Polygon, num_divisions: int, incident_location: Point = None, roads: List[LineString] = None
-    ) -> List[Dict]:
-        """Create road-aware divisions using roads as natural boundaries"""
-        try:
-            if not roads:
-                return []
-
-            print(f"Creating road-aware divisions with {len(roads)} roads")
-            
-            # Filter roads to only major ones within our polygon
-            major_roads = []
-            for road in roads:
-                try:
-                    # Only use roads that significantly cross our polygon
-                    intersection = polygon.intersection(road)
-                    if isinstance(intersection, LineString) and intersection.length > 0.001:  # Significant intersection
-                        major_roads.append(road)
-                    elif hasattr(intersection, 'geoms'):
-                        for geom in intersection.geoms:
-                            if isinstance(geom, LineString) and geom.length > 0.001:
-                                major_roads.append(road)
-                                break
-                except Exception as e:
-                    print(f"Error filtering road: {e}")
-                    continue
-
-            print(f"Filtered to {len(major_roads)} major roads")
-            
-            if not major_roads:
-                return []
-
-            # Create a simpler approach: use roads to create natural division boundaries
-            bounds = polygon.bounds
-            divisions = []
-            
-            # Start with a base grid but modify it based on roads
-            cols = int((num_divisions**0.5)) if num_divisions > 1 else 1
-            rows = int(num_divisions / cols) + (1 if num_divisions % cols else 0)
-
-            width = (bounds[2] - bounds[0]) / cols
-            height = (bounds[3] - bounds[1]) / rows
-
-            division_counter = 0
-            
-            # Create horizontal and vertical division lines, but snap them to roads
-            division_lines = []
-            
-            # Create vertical division lines (adjusted by roads)
-            for i in range(1, cols):
-                x = bounds[0] + i * width
-                base_line = LineString([(x, bounds[1]), (x, bounds[3])])
-                
-                # Find nearest major road and snap to it if close
-                best_road = None
-                min_distance = float('inf')
-                
-                for road in major_roads:
-                    try:
-                        distance = base_line.distance(road)
-                        if distance < min_distance and distance < width * 0.3:  # Within 30% of grid width
-                            min_distance = distance
-                            best_road = road
-                    except:
-                        continue
-                
-                if best_road:
-                    # Use the road as the division line
-                    road_intersection = polygon.intersection(best_road)
-                    if isinstance(road_intersection, LineString):
-                        division_lines.append(road_intersection)
-                    elif hasattr(road_intersection, 'geoms'):
-                        for geom in road_intersection.geoms:
-                            if isinstance(geom, LineString):
-                                division_lines.append(geom)
-                else:
-                    # Use original grid line
-                    grid_intersection = polygon.intersection(base_line)
-                    if isinstance(grid_intersection, LineString):
-                        division_lines.append(grid_intersection)
-
-            # Create horizontal division lines (adjusted by roads)
-            for i in range(1, rows):
-                y = bounds[1] + i * height
-                base_line = LineString([(bounds[0], y), (bounds[2], y)])
-                
-                # Find nearest major road and snap to it if close
-                best_road = None
-                min_distance = float('inf')
-                
-                for road in major_roads:
-                    try:
-                        distance = base_line.distance(road)
-                        if distance < min_distance and distance < height * 0.3:  # Within 30% of grid height
-                            min_distance = distance
-                            best_road = road
-                    except:
-                        continue
-                
-                if best_road:
-                    # Use the road as the division line
-                    road_intersection = polygon.intersection(best_road)
-                    if isinstance(road_intersection, LineString):
-                        division_lines.append(road_intersection)
-                    elif hasattr(road_intersection, 'geoms'):
-                        for geom in road_intersection.geoms:
-                            if isinstance(geom, LineString):
-                                division_lines.append(geom)
-                else:
-                    # Use original grid line
-                    grid_intersection = polygon.intersection(base_line)
-                    if isinstance(grid_intersection, LineString):
-                        division_lines.append(grid_intersection)
-
-            print(f"Created {len(division_lines)} division lines")
-
-            # If we have division lines, try to use them to create polygons
-            if division_lines:
-                try:
-                    # Extend division lines to ensure they create complete boundaries
-                    extended_lines = []
-                    polygon_boundary = polygon.boundary
-                    
-                    for line in division_lines:
-                        coords = list(line.coords)
-                        if len(coords) >= 2:
-                            # Extend line to polygon boundary
-                            start_point = Point(coords[0])
-                            end_point = Point(coords[-1])
-                            
-                            # Extend line by 10% in both directions
-                            dx = coords[-1][0] - coords[0][0]
-                            dy = coords[-1][1] - coords[0][1]
-                            
-                            if abs(dx) > 0.0001 or abs(dy) > 0.0001:
-                                length_factor = 0.1
-                                extended_start = (coords[0][0] - dx * length_factor, coords[0][1] - dy * length_factor)
-                                extended_end = (coords[-1][0] + dx * length_factor, coords[-1][1] + dy * length_factor)
-                                extended_lines.append(LineString([extended_start] + coords + [extended_end]))
-                            else:
-                                extended_lines.append(line)
-                    
-                    # Add polygon boundary to help with polygonization
-                    if hasattr(polygon.boundary, 'geoms'):
-                        for boundary_part in polygon.boundary.geoms:
-                            if isinstance(boundary_part, LineString):
-                                extended_lines.append(boundary_part)
-                    else:
-                        extended_lines.append(polygon.boundary)
-                    
-                    # Create polygons from lines
-                    try:
-                        result_polygons = list(polygonize(extended_lines))
-                        print(f"Polygonize created {len(result_polygons)} polygons")
-                        
-                        # Filter and validate polygons
-                        valid_polygons = []
-                        for poly in result_polygons:
-                            try:
-                                if hasattr(poly, 'area') and poly.area > 0.000001:
-                                    # Check if polygon is within our search area
-                                    if polygon.contains(poly.centroid) or polygon.intersects(poly):
-                                        # Clip to our search area
-                                        clipped = polygon.intersection(poly)
-                                        if hasattr(clipped, 'area') and clipped.area > 0.000001:
-                                            if hasattr(clipped, 'exterior'):
-                                                valid_polygons.append(clipped)
-                                            elif hasattr(clipped, 'geoms'):
-                                                for geom in clipped.geoms:
-                                                    if hasattr(geom, 'area') and geom.area > 0.000001 and hasattr(geom, 'exterior'):
-                                                        valid_polygons.append(geom)
-                            except Exception as e:
-                                print(f"Error validating polygon: {e}")
-                                continue
-                        
-                        print(f"Found {len(valid_polygons)} valid polygons")
-                        
-                        # Create divisions from valid polygons - FIXED: Allow single polygon
-                        if valid_polygons and len(valid_polygons) >= 1:
-                            # Sort by area (largest first) and take up to num_divisions
-                            valid_polygons.sort(key=lambda p: p.area, reverse=True)
-                            
-                            for i, geom in enumerate(valid_polygons[:num_divisions]):
-                                if division_counter >= num_divisions:
-                                    break
-                                    
-                                try:
-                                    coords = list(geom.exterior.coords)
-                                    
-                                    division_letter = chr(65 + division_counter)
-                                    division_name = f"Division {division_letter}"
-                                    division_id = f"DIV-{division_letter}"
-
-                                    priority = self._calculate_division_priority(
-                                        geom, incident_location, divisions
-                                    )
-
-                                    divisions.append({
-                                        "division_name": division_name,
-                                        "division_id": division_id,
-                                        "coordinates": coords,
-                                        "estimated_area_m2": self._calculate_area_m2(geom),
-                                        "status": "unassigned",
-                                        "priority": priority,
-                                        "search_type": "primary",
-                                        "estimated_duration": "2 hours",
-                                    })
-
-                                    division_counter += 1
-                                    
-                                except Exception as e:
-                                    print(f"Error creating division from polygon: {e}")
-                                    continue
-                        
-                    except Exception as e:
-                        print(f"Polygonize failed: {e}")
-                
-                except Exception as e:
-                    print(f"Error in polygon creation: {e}")
-
-            # If road-based approach didn't create enough divisions, subdivide existing ones
-            if len(divisions) < num_divisions and len(divisions) > 0:
-                print(f"Road-based approach created {len(divisions)} divisions, need {num_divisions}. Subdividing...")
-                divisions = self._subdivide_divisions(divisions, num_divisions, polygon)
-
-            # Only fall back to grid if we have no valid divisions at all
-            if len(divisions) == 0:
-                print("Road-based approach created no valid divisions, falling back to grid")
-                return []
-
-            print(f"Successfully created {len(divisions)} road-aware divisions")
-            return divisions
-
-        except Exception as e:
-            print(f"Road-aware division creation failed: {e}")
-            return []
 
     def _calculate_division_priority(
         self, division_geom: Polygon, incident_location: Point, existing_divisions: List[Dict]
@@ -842,12 +889,12 @@ class Incident:
             try:
                 road_data = self._fetch_road_data(self.search_area)
                 if road_data:
-                    divisions = self._create_road_aware_divisions(num_divisions, road_data)
+                    divisions = self._create_voronoi_road_divisions(num_divisions, road_data)
                     if divisions:
                         self._save_divisions(divisions)
                         return divisions
             except Exception as e:
-                print(f"Road-aware division failed, falling back to grid: {e}")
+                print(f"Voronoi road-aware division failed, falling back to grid: {e}")
 
             # Fallback to grid divisions
             divisions = self._create_grid_divisions(num_divisions)
@@ -858,132 +905,63 @@ class Incident:
             print(f"Failed to generate divisions: {e}")
             return []
 
-    def _create_road_aware_divisions(self, num_divisions: int, roads: List[LineString]) -> List[Dict]:
-        """Create road-aware divisions using roads as natural boundaries"""
+    def _create_voronoi_road_divisions(self, num_divisions: int, roads: List[LineString]) -> List[Dict]:
+        """Create road-aware divisions using Voronoi diagram with road-based seed points"""
         try:
             if not roads:
                 return []
 
-            bounds = self.search_area.bounds
-            cols = int((num_divisions**0.5)) if num_divisions > 1 else 1
-            rows = int(num_divisions / cols) + (1 if num_divisions % cols else 0)
+            print(f"Creating Voronoi road-aware divisions with {len(roads)} roads")
+            
+            # Generate seed points from roads
+            seed_points = self._generate_road_seed_points(roads, self.search_area, num_divisions)
+            
+            if len(seed_points) < 2:
+                print("Not enough seed points for Voronoi diagram")
+                return []
 
-            width = (bounds[2] - bounds[0]) / cols
-            height = (bounds[3] - bounds[1]) / rows
+            # Generate Voronoi cells
+            voronoi_cells = self._generate_voronoi_cells(seed_points, self.search_area)
+            
+            if not voronoi_cells:
+                print("Failed to generate Voronoi cells")
+                return []
 
+            # Create divisions from Voronoi cells
             divisions = []
-            division_counter = 0
+            for i, cell in enumerate(voronoi_cells[:num_divisions]):
+                if i >= num_divisions:
+                    break
+                    
+                try:
+                    division_letter = chr(65 + i)
+                    division_name = f"Division {division_letter}"
+                    division_id = f"DIV-{division_letter}"
 
-            for row in range(rows):
-                for col in range(cols):
-                    if division_counter >= num_divisions:
-                        break
+                    priority = self._calculate_division_priority(
+                        cell, self.incident_location, divisions
+                    )
 
-                    # Create base grid cell
-                    x1 = bounds[0] + col * width
-                    y1 = bounds[1] + row * height
-                    x2 = x1 + width
-                    y2 = y1 + height
-
-                    cell = Polygon([(x1, y1), (x2, y1), (x2, y2), (x1, y2)])
-
-                    try:
-                        # Clip to search area
-                        if not self.search_area.intersects(cell):
-                            continue
-
-                        clipped_cell = self.search_area.intersection(cell)
-                        if not hasattr(clipped_cell, "area") or clipped_cell.area <= 0:
-                            continue
-
-                        # Process with roads
-                        final_geometries = []
-                        intersecting_roads = [road for road in roads if clipped_cell.intersects(road)]
+                    divisions.append({
+                        "name": division_name,
+                        "division_id": division_id,
+                        "geometry": cell,
+                        "area_m2": self._calculate_area_m2(cell),
+                        "status": "unassigned",
+                        "priority": priority,
+                        "search_type": "primary",
+                        "estimated_duration": "2 hours",
+                    })
                         
-                        if intersecting_roads:
-                            # Create road-bounded divisions
-                            try:
-                                splitting_lines = []
-                                for road in intersecting_roads:
-                                    intersection = clipped_cell.intersection(road)
-                                    if hasattr(intersection, "geoms"):
-                                        for geom in intersection.geoms:
-                                            if isinstance(geom, LineString):
-                                                splitting_lines.append(geom)
-                                    elif isinstance(intersection, LineString):
-                                        splitting_lines.append(intersection)
+                except Exception as e:
+                    print(f"Error creating division from Voronoi cell: {e}")
+                    continue
 
-                                if splitting_lines:
-                                    # Extend lines and polygonize
-                                    extended_lines = []
-                                    for line in splitting_lines:
-                                        coords = list(line.coords)
-                                        if len(coords) >= 2:
-                                            start, end = coords[0], coords[-1]
-                                            dx = end[0] - start[0]
-                                            dy = end[1] - start[1]
-                                            
-                                            if abs(dx) > 0.0001 or abs(dy) > 0.0001:
-                                                extended_start = (start[0] - dx * 2, start[1] - dy * 2)
-                                                extended_end = (end[0] + dx * 2, end[1] + dy * 2)
-                                                extended_lines.append(LineString([extended_start, extended_end]))
-
-                                    if extended_lines:
-                                        boundary_lines = list(clipped_cell.exterior.coords)
-                                        all_lines = extended_lines + [LineString(boundary_lines)]
-                                        
-                                        try:
-                                            polygons = list(polygonize(all_lines))
-                                            valid_polygons = [p for p in polygons if clipped_cell.contains(p.centroid) and p.area > 0.000001]
-                                            if valid_polygons:
-                                                final_geometries = valid_polygons
-                                        except:
-                                            pass
-                            except Exception as e:
-                                print(f"Road processing failed for cell {row},{col}: {e}")
-
-                        # Fallback to original cell if road processing failed
-                        if not final_geometries:
-                            if hasattr(clipped_cell, "exterior"):
-                                final_geometries = [clipped_cell]
-                            elif hasattr(clipped_cell, "geoms"):
-                                final_geometries = [g for g in clipped_cell.geoms if hasattr(g, "area") and g.area > 0]
-
-                        # Create division objects
-                        for geom in final_geometries:
-                            if hasattr(geom, "exterior") and geom.area > 0.000001:
-                                division_letter = chr(65 + division_counter)
-                                division_name = f"Division {division_letter}"
-                                division_id = f"DIV-{division_letter}"
-
-                                priority = self._calculate_division_priority(
-                                    geom, self.incident_location, divisions
-                                )
-
-                                divisions.append({
-                                    "name": division_name,
-                                    "division_id": division_id,
-                                    "geometry": geom,
-                                    "area_m2": self._calculate_area_m2(geom),
-                                    "status": "unassigned",
-                                    "priority": priority,
-                                    "search_type": "primary",
-                                    "estimated_duration": "2 hours",
-                                })
-
-                                division_counter += 1
-                                
-                                if division_counter >= num_divisions:
-                                    break
-
-                    except Exception as e:
-                        print(f"Error processing road-aware cell {row},{col}: {e}")
-                        continue
-
+            print(f"Successfully created {len(divisions)} Voronoi road-aware divisions")
             return divisions
 
         except Exception as e:
-            print(f"Road-aware division creation failed: {e}")
+            print(f"Voronoi road-aware division creation failed: {e}")
             return []
 
     def _clear_existing_divisions(self):
@@ -1014,7 +992,7 @@ class Incident:
                 data = response.json()
                 return data.get("display_name", f"{latitude}, {longitude}")
             else:
-                return f"{latitude}, {longitude}")
+                return f"{latitude}, {longitude}"
 
         except Exception as e:
             print(f"Reverse geocoding failed: {e}")
