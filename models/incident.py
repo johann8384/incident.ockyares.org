@@ -1,3 +1,91 @@
+import json
+import os
+import uuid
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+import hashlib
+
+import requests
+from shapely.geometry import Point, Polygon, LineString, MultiLineString
+from shapely.ops import unary_union, polygonize
+
+from .database import DatabaseManager
+from .hospital import Hospital
+
+
+class Incident:
+    """Incident management class"""
+
+    def __init__(self, db_manager: DatabaseManager = None):
+        self.db = db_manager or DatabaseManager()
+        self.hospital_manager = Hospital(self.db)
+        self.incident_id = None
+        self.name = None
+        self.incident_type = None
+        self.description = None
+        self.incident_location = None
+        self.address = None
+        self.search_area = None
+        self.search_divisions = []
+        self.hospital_data = None
+        self.search_area_size_m2 = int(os.getenv("SEARCH_AREA_SIZE_M2", 40000))
+        self.team_size = int(os.getenv("TEAM_SIZE", 4))
+        self._road_cache = {}
+
+    def _fetch_road_data(self, polygon: Polygon) -> List[LineString]:
+        """Fetch road data from Overpass API within polygon bounds"""
+        try:
+            # Create cache key from polygon bounds
+            bounds = polygon.bounds
+            cache_key = hashlib.md5(str(bounds).encode()).hexdigest()
+            
+            # Check cache first
+            if cache_key in self._road_cache:
+                return self._road_cache[cache_key]
+
+            # Build Overpass API query
+            overpass_url = "https://overpass-api.de/api/interpreter"
+            
+            # Query for major roads (highways, primary, secondary, tertiary)
+            query = f"""
+            [out:json][timeout:25];
+            (
+              way["highway"~"^(motorway|trunk|primary|secondary|tertiary|residential)$"]({bounds[1]},{bounds[0]},{bounds[3]},{bounds[2]});
+            );
+            out geom;
+            """
+
+            response = requests.post(overpass_url, data=query, timeout=30)
+            
+            if response.status_code != 200:
+                print(f"Overpass API error: {response.status_code}")
+                return []
+
+            data = response.json()
+            roads = []
+
+            for element in data.get("elements", []):
+                if element["type"] == "way" and "geometry" in element:
+                    coords = [(node["lon"], node["lat"]) for node in element["geometry"]]
+                    if len(coords) >= 2:
+                        try:
+                            line = LineString(coords)
+                            # Only include roads that intersect our polygon
+                            if polygon.intersects(line):
+                                roads.append(line)
+                        except Exception as e:
+                            print(f"Error creating LineString: {e}")
+                            continue
+
+            # Cache the result
+            self._road_cache[cache_key] = roads
+            print(f"Fetched {len(roads)} roads for area")
+            return roads
+
+        except Exception as e:
+            print(f"Failed to fetch road data: {e}")
+            return []
+
     def _create_road_aware_divisions_preview(
         self, polygon: Polygon, num_divisions: int, incident_location: Point = None, roads: List[LineString] = None
     ) -> List[Dict]:
@@ -229,3 +317,5 @@
         except Exception as e:
             print(f"Road-aware division creation failed: {e}")
             return []
+
+    # ... rest of the file continues as before
