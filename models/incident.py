@@ -203,6 +203,142 @@ class Incident:
             print(f"Failed to fetch road data: {e}")
             return []
 
+    def _subdivide_divisions(self, divisions: List[Dict], target_count: int, search_area: Polygon) -> List[Dict]:
+        """Subdivide existing divisions to reach target count"""
+        try:
+            subdivided_divisions = []
+            
+            # Sort divisions by area (largest first) to subdivide biggest ones
+            sorted_divisions = sorted(divisions, key=lambda d: d.get('estimated_area_m2', 0), reverse=True)
+            
+            divisions_needed = target_count - len(divisions)
+            divisions_to_subdivide = min(divisions_needed, len(sorted_divisions))
+            
+            for i, division in enumerate(sorted_divisions):
+                if i < divisions_to_subdivide:
+                    # Subdivide this division
+                    sub_divisions = self._subdivide_single_division(division, search_area)
+                    subdivided_divisions.extend(sub_divisions)
+                else:
+                    # Keep original division
+                    subdivided_divisions.append(division)
+                    
+                # Stop if we have enough divisions
+                if len(subdivided_divisions) >= target_count:
+                    break
+            
+            # Rename divisions to maintain alphabetical order
+            for i, division in enumerate(subdivided_divisions[:target_count]):
+                division_letter = chr(65 + i)  # A, B, C, etc.
+                division['division_name'] = f"Division {division_letter}"
+                division['division_id'] = f"DIV-{division_letter}"
+            
+            print(f"Subdivided {divisions_to_subdivide} divisions, total now: {len(subdivided_divisions[:target_count])}")
+            return subdivided_divisions[:target_count]
+            
+        except Exception as e:
+            print(f"Error subdividing divisions: {e}")
+            return divisions
+
+    def _subdivide_single_division(self, division: Dict, search_area: Polygon) -> List[Dict]:
+        """Subdivide a single division into north/south or east/west halves"""
+        try:
+            coords = division.get('coordinates', [])
+            if not coords:
+                return [division]
+            
+            # Create polygon from coordinates
+            poly = Polygon(coords)
+            bounds = poly.bounds
+            
+            # Determine split direction based on aspect ratio
+            width = bounds[2] - bounds[0]
+            height = bounds[3] - bounds[1]
+            
+            if width > height:
+                # Split vertically (east/west)
+                mid_x = (bounds[0] + bounds[2]) / 2
+                west_box = Polygon([
+                    (bounds[0], bounds[1]),
+                    (mid_x, bounds[1]),
+                    (mid_x, bounds[3]),
+                    (bounds[0], bounds[3])
+                ])
+                east_box = Polygon([
+                    (mid_x, bounds[1]),
+                    (bounds[2], bounds[1]),
+                    (bounds[2], bounds[3]),
+                    (mid_x, bounds[3])
+                ])
+                direction_names = ["West", "East"]
+                boxes = [west_box, east_box]
+            else:
+                # Split horizontally (north/south)
+                mid_y = (bounds[1] + bounds[3]) / 2
+                south_box = Polygon([
+                    (bounds[0], bounds[1]),
+                    (bounds[2], bounds[1]),
+                    (bounds[2], mid_y),
+                    (bounds[0], mid_y)
+                ])
+                north_box = Polygon([
+                    (bounds[0], mid_y),
+                    (bounds[2], mid_y),
+                    (bounds[2], bounds[3]),
+                    (bounds[0], bounds[3])
+                ])
+                direction_names = ["South", "North"]
+                boxes = [south_box, north_box]
+            
+            subdivisions = []
+            for i, box in enumerate(boxes):
+                try:
+                    # Intersect with original division and search area
+                    clipped = poly.intersection(box)
+                    if search_area:
+                        clipped = search_area.intersection(clipped)
+                    
+                    if hasattr(clipped, 'area') and clipped.area > 0.000001:
+                        # Handle MultiPolygon case
+                        if hasattr(clipped, 'exterior'):
+                            geoms = [clipped]
+                        elif hasattr(clipped, 'geoms'):
+                            geoms = [g for g in clipped.geoms if hasattr(g, 'area') and g.area > 0.000001]
+                        else:
+                            continue
+                        
+                        for geom in geoms:
+                            if hasattr(geom, 'exterior'):
+                                sub_coords = list(geom.exterior.coords)
+                                
+                                # Create new division with direction suffix
+                                base_name = division.get('division_name', 'Division')
+                                sub_division = {
+                                    'division_name': f"{base_name} {direction_names[i]}",
+                                    'division_id': f"{division.get('division_id', 'DIV')}-{direction_names[i][0]}",
+                                    'coordinates': sub_coords,
+                                    'estimated_area_m2': self._calculate_area_m2(geom),
+                                    'status': division.get('status', 'unassigned'),
+                                    'priority': division.get('priority', 'Low'),
+                                    'search_type': division.get('search_type', 'primary'),
+                                    'estimated_duration': division.get('estimated_duration', '2 hours'),
+                                }
+                                subdivisions.append(sub_division)
+                
+                except Exception as e:
+                    print(f"Error creating subdivision {i}: {e}")
+                    continue
+            
+            # If subdivision failed, return original
+            if not subdivisions:
+                return [division]
+            
+            return subdivisions
+            
+        except Exception as e:
+            print(f"Error subdividing single division: {e}")
+            return [division]
+
     def _create_road_aware_divisions_preview(
         self, polygon: Polygon, num_divisions: int, incident_location: Point = None, roads: List[LineString] = None
     ) -> List[Dict]:
@@ -423,7 +559,12 @@ class Incident:
                 except Exception as e:
                     print(f"Error in polygon creation: {e}")
 
-            # If road-based approach didn't work well, ensure we have some divisions
+            # If road-based approach didn't create enough divisions, subdivide existing ones
+            if len(divisions) < num_divisions and len(divisions) > 0:
+                print(f"Road-based approach created {len(divisions)} divisions, need {num_divisions}. Subdividing...")
+                divisions = self._subdivide_divisions(divisions, num_divisions, polygon)
+
+            # If still not enough divisions, fall back to grid
             if len(divisions) < max(1, num_divisions // 2):
                 print("Road-based approach didn't create enough divisions, falling back to grid")
                 return []
