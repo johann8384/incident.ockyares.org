@@ -3,9 +3,11 @@ import os
 import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
+import hashlib
 
 import requests
-from shapely.geometry import Point, Polygon
+from shapely.geometry import Point, Polygon, LineString, MultiLineString
+from shapely.ops import unary_union, polygonize
 
 from .database import DatabaseManager
 from .hospital import Hospital
@@ -28,6 +30,7 @@ class Incident:
         self.hospital_data = None
         self.search_area_size_m2 = int(os.getenv("SEARCH_AREA_SIZE_M2", 40000))
         self.team_size = int(os.getenv("TEAM_SIZE", 4))
+        self._road_cache = {}
 
     def create_incident(
         self,
@@ -123,7 +126,19 @@ class Incident:
             area_m2 = self._calculate_area_m2(polygon)
             num_divisions = max(1, int(area_m2 / area_size_m2))
 
-            # Generate divisions with priority calculation
+            # Try road-aware divisions first
+            try:
+                road_data = self._fetch_road_data(polygon)
+                if road_data:
+                    divisions = self._create_road_aware_divisions_preview(
+                        polygon, num_divisions, self.incident_location, road_data
+                    )
+                    if divisions:
+                        return divisions
+            except Exception as e:
+                print(f"Road-aware division failed, falling back to grid: {e}")
+
+            # Fallback to grid divisions
             divisions = self._create_grid_divisions_preview(
                 polygon, num_divisions, self.incident_location
             )
@@ -133,6 +148,209 @@ class Incident:
         except Exception as e:
             print(f"Failed to generate divisions preview: {e}")
             raise e
+
+    def _fetch_road_data(self, polygon: Polygon) -> List[LineString]:
+        """Fetch road data from Overpass API within polygon bounds"""
+        try:
+            # Create cache key from polygon bounds
+            bounds = polygon.bounds
+            cache_key = hashlib.md5(str(bounds).encode()).hexdigest()
+            
+            # Check cache first
+            if cache_key in self._road_cache:
+                return self._road_cache[cache_key]
+
+            # Build Overpass API query
+            overpass_url = "https://overpass-api.de/api/interpreter"
+            
+            # Query for major roads (highways, primary, secondary, tertiary)
+            query = f"""
+            [out:json][timeout:25];
+            (
+              way["highway"~"^(motorway|trunk|primary|secondary|tertiary|residential)$"]({bounds[1]},{bounds[0]},{bounds[3]},{bounds[2]});
+            );
+            out geom;
+            """
+
+            response = requests.post(overpass_url, data=query, timeout=30)
+            
+            if response.status_code != 200:
+                print(f"Overpass API error: {response.status_code}")
+                return []
+
+            data = response.json()
+            roads = []
+
+            for element in data.get("elements", []):
+                if element["type"] == "way" and "geometry" in element:
+                    coords = [(node["lon"], node["lat"]) for node in element["geometry"]]
+                    if len(coords) >= 2:
+                        try:
+                            line = LineString(coords)
+                            # Only include roads that intersect our polygon
+                            if polygon.intersects(line):
+                                roads.append(line)
+                        except Exception as e:
+                            print(f"Error creating LineString: {e}")
+                            continue
+
+            # Cache the result
+            self._road_cache[cache_key] = roads
+            print(f"Fetched {len(roads)} roads for area")
+            return roads
+
+        except Exception as e:
+            print(f"Failed to fetch road data: {e}")
+            return []
+
+    def _create_road_aware_divisions_preview(
+        self, polygon: Polygon, num_divisions: int, incident_location: Point = None, roads: List[LineString] = None
+    ) -> List[Dict]:
+        """Create road-aware divisions using roads as natural boundaries"""
+        try:
+            if not roads:
+                return []
+
+            # Create a buffer around roads to form barriers
+            road_buffer = unary_union([road.buffer(0.0001) for road in roads])  # Small buffer in degrees
+            
+            # Create initial grid
+            bounds = polygon.bounds
+            cols = int((num_divisions**0.5)) if num_divisions > 1 else 1
+            rows = int(num_divisions / cols) + (1 if num_divisions % cols else 0)
+
+            width = (bounds[2] - bounds[0]) / cols
+            height = (bounds[3] - bounds[1]) / rows
+
+            divisions = []
+            division_counter = 0
+
+            for row in range(rows):
+                for col in range(cols):
+                    if division_counter >= num_divisions:
+                        break
+
+                    # Create base grid cell
+                    x1 = bounds[0] + col * width
+                    y1 = bounds[1] + row * height
+                    x2 = x1 + width
+                    y2 = y1 + height
+
+                    cell = Polygon([(x1, y1), (x2, y1), (x2, y2), (x1, y2)])
+
+                    try:
+                        # Clip to search area
+                        if not polygon.intersects(cell):
+                            continue
+
+                        clipped_cell = polygon.intersection(cell)
+                        if not hasattr(clipped_cell, "area") or clipped_cell.area <= 0:
+                            continue
+
+                        # Handle road boundaries - split cell by roads if they cross it
+                        final_geometries = []
+                        
+                        # Check if any roads intersect this cell
+                        intersecting_roads = [road for road in roads if clipped_cell.intersects(road)]
+                        
+                        if intersecting_roads:
+                            # Try to split the cell using road intersections
+                            try:
+                                # Create splitting lines from intersecting roads
+                                splitting_lines = []
+                                for road in intersecting_roads:
+                                    intersection = clipped_cell.intersection(road)
+                                    if hasattr(intersection, "geoms"):
+                                        for geom in intersection.geoms:
+                                            if isinstance(geom, LineString):
+                                                splitting_lines.append(geom)
+                                    elif isinstance(intersection, LineString):
+                                        splitting_lines.append(intersection)
+
+                                if splitting_lines:
+                                    # Extend lines to cell boundaries to ensure complete splits
+                                    extended_lines = []
+                                    cell_bounds = clipped_cell.bounds
+                                    
+                                    for line in splitting_lines:
+                                        coords = list(line.coords)
+                                        if len(coords) >= 2:
+                                            # Extend line to cell boundary
+                                            start, end = coords[0], coords[-1]
+                                            
+                                            # Simple extension - extend by cell dimensions
+                                            dx = end[0] - start[0]
+                                            dy = end[1] - start[1]
+                                            
+                                            if abs(dx) > 0.0001 or abs(dy) > 0.0001:  # Avoid zero-length extensions
+                                                extended_start = (start[0] - dx * 2, start[1] - dy * 2)
+                                                extended_end = (end[0] + dx * 2, end[1] + dy * 2)
+                                                extended_lines.append(LineString([extended_start, extended_end]))
+
+                                    # Attempt to create polygons from the split
+                                    if extended_lines:
+                                        # Create boundary with roads
+                                        boundary_lines = list(clipped_cell.exterior.coords)
+                                        all_lines = extended_lines + [LineString(boundary_lines)]
+                                        
+                                        # Try polygonize to create road-bounded areas
+                                        try:
+                                            polygons = list(polygonize(all_lines))
+                                            if polygons:
+                                                # Filter polygons that are within our cell
+                                                valid_polygons = [p for p in polygons if clipped_cell.contains(p.centroid) and p.area > 0.000001]
+                                                if valid_polygons:
+                                                    final_geometries = valid_polygons
+                                        except:
+                                            pass
+                            except Exception as e:
+                                print(f"Road splitting failed for cell {row},{col}: {e}")
+
+                        # If road-aware splitting failed, use the original clipped cell
+                        if not final_geometries:
+                            if hasattr(clipped_cell, "exterior"):
+                                final_geometries = [clipped_cell]
+                            elif hasattr(clipped_cell, "geoms"):
+                                final_geometries = [g for g in clipped_cell.geoms if hasattr(g, "area") and g.area > 0]
+
+                        # Create divisions from final geometries
+                        for geom in final_geometries:
+                            if hasattr(geom, "exterior") and geom.area > 0.000001:
+                                coords = list(geom.exterior.coords)
+                                
+                                division_letter = chr(65 + division_counter)
+                                division_name = f"Division {division_letter}"
+                                division_id = f"DIV-{division_letter}"
+
+                                priority = self._calculate_division_priority(
+                                    geom, incident_location, divisions
+                                )
+
+                                divisions.append({
+                                    "division_name": division_name,
+                                    "division_id": division_id,
+                                    "coordinates": coords,
+                                    "estimated_area_m2": self._calculate_area_m2(geom),
+                                    "status": "unassigned",
+                                    "priority": priority,
+                                    "search_type": "primary",
+                                    "estimated_duration": "2 hours",
+                                })
+
+                                division_counter += 1
+                                
+                                if division_counter >= num_divisions:
+                                    break
+
+                    except Exception as e:
+                        print(f"Error processing road-aware cell {row},{col}: {e}")
+                        continue
+
+            return divisions if divisions else []
+
+        except Exception as e:
+            print(f"Road-aware division creation failed: {e}")
+            return []
 
     def _calculate_division_priority(
         self, division_geom: Polygon, incident_location: Point, existing_divisions: List[Dict]
@@ -390,17 +608,152 @@ class Incident:
             area_m2 = self._calculate_area_m2(self.search_area)
             num_divisions = max(1, int(area_m2 / self.search_area_size_m2))
 
-            # For now, create simple grid divisions
-            # TODO: Integrate with OSM road data for better alignment
+            # Try road-aware divisions first
+            try:
+                road_data = self._fetch_road_data(self.search_area)
+                if road_data:
+                    divisions = self._create_road_aware_divisions(num_divisions, road_data)
+                    if divisions:
+                        self._save_divisions(divisions)
+                        return divisions
+            except Exception as e:
+                print(f"Road-aware division failed, falling back to grid: {e}")
+
+            # Fallback to grid divisions
             divisions = self._create_grid_divisions(num_divisions)
-
-            # Save divisions to database
             self._save_divisions(divisions)
-
             return divisions
 
         except Exception as e:
             print(f"Failed to generate divisions: {e}")
+            return []
+
+    def _create_road_aware_divisions(self, num_divisions: int, roads: List[LineString]) -> List[Dict]:
+        """Create road-aware divisions using roads as natural boundaries"""
+        try:
+            if not roads:
+                return []
+
+            bounds = self.search_area.bounds
+            cols = int((num_divisions**0.5)) if num_divisions > 1 else 1
+            rows = int(num_divisions / cols) + (1 if num_divisions % cols else 0)
+
+            width = (bounds[2] - bounds[0]) / cols
+            height = (bounds[3] - bounds[1]) / rows
+
+            divisions = []
+            division_counter = 0
+
+            for row in range(rows):
+                for col in range(cols):
+                    if division_counter >= num_divisions:
+                        break
+
+                    # Create base grid cell
+                    x1 = bounds[0] + col * width
+                    y1 = bounds[1] + row * height
+                    x2 = x1 + width
+                    y2 = y1 + height
+
+                    cell = Polygon([(x1, y1), (x2, y1), (x2, y2), (x1, y2)])
+
+                    try:
+                        # Clip to search area
+                        if not self.search_area.intersects(cell):
+                            continue
+
+                        clipped_cell = self.search_area.intersection(cell)
+                        if not hasattr(clipped_cell, "area") or clipped_cell.area <= 0:
+                            continue
+
+                        # Process with roads
+                        final_geometries = []
+                        intersecting_roads = [road for road in roads if clipped_cell.intersects(road)]
+                        
+                        if intersecting_roads:
+                            # Create road-bounded divisions
+                            try:
+                                splitting_lines = []
+                                for road in intersecting_roads:
+                                    intersection = clipped_cell.intersection(road)
+                                    if hasattr(intersection, "geoms"):
+                                        for geom in intersection.geoms:
+                                            if isinstance(geom, LineString):
+                                                splitting_lines.append(geom)
+                                    elif isinstance(intersection, LineString):
+                                        splitting_lines.append(intersection)
+
+                                if splitting_lines:
+                                    # Extend lines and polygonize
+                                    extended_lines = []
+                                    for line in splitting_lines:
+                                        coords = list(line.coords)
+                                        if len(coords) >= 2:
+                                            start, end = coords[0], coords[-1]
+                                            dx = end[0] - start[0]
+                                            dy = end[1] - start[1]
+                                            
+                                            if abs(dx) > 0.0001 or abs(dy) > 0.0001:
+                                                extended_start = (start[0] - dx * 2, start[1] - dy * 2)
+                                                extended_end = (end[0] + dx * 2, end[1] + dy * 2)
+                                                extended_lines.append(LineString([extended_start, extended_end]))
+
+                                    if extended_lines:
+                                        boundary_lines = list(clipped_cell.exterior.coords)
+                                        all_lines = extended_lines + [LineString(boundary_lines)]
+                                        
+                                        try:
+                                            polygons = list(polygonize(all_lines))
+                                            valid_polygons = [p for p in polygons if clipped_cell.contains(p.centroid) and p.area > 0.000001]
+                                            if valid_polygons:
+                                                final_geometries = valid_polygons
+                                        except:
+                                            pass
+                            except Exception as e:
+                                print(f"Road processing failed for cell {row},{col}: {e}")
+
+                        # Fallback to original cell if road processing failed
+                        if not final_geometries:
+                            if hasattr(clipped_cell, "exterior"):
+                                final_geometries = [clipped_cell]
+                            elif hasattr(clipped_cell, "geoms"):
+                                final_geometries = [g for g in clipped_cell.geoms if hasattr(g, "area") and g.area > 0]
+
+                        # Create division objects
+                        for geom in final_geometries:
+                            if hasattr(geom, "exterior") and geom.area > 0.000001:
+                                division_letter = chr(65 + division_counter)
+                                division_name = f"Division {division_letter}"
+                                division_id = f"DIV-{division_letter}"
+
+                                priority = self._calculate_division_priority(
+                                    geom, self.incident_location, divisions
+                                )
+
+                                divisions.append({
+                                    "name": division_name,
+                                    "division_id": division_id,
+                                    "geometry": geom,
+                                    "area_m2": self._calculate_area_m2(geom),
+                                    "status": "unassigned",
+                                    "priority": priority,
+                                    "search_type": "primary",
+                                    "estimated_duration": "2 hours",
+                                })
+
+                                division_counter += 1
+                                
+                                if division_counter >= num_divisions:
+                                    break
+
+                    except Exception as e:
+                        print(f"Error processing road-aware cell {row},{col}: {e}")
+                        continue
+
+            return divisions
+
+        except Exception as e:
+            print(f"Road-aware division creation failed: {e}")
             return []
 
     def _clear_existing_divisions(self):
