@@ -22,6 +22,9 @@ class DivisionManager:
     def __init__(self, db_manager: DatabaseManager = None):
         self.db = db_manager or DatabaseManager()
         self._road_cache = {}
+        # Distance between seed points along roads (4000 feet = ~1219 meters)
+        # Converting to degrees: approximately 0.011 degrees per 1000 meters
+        self.SEED_POINT_DISTANCE_DEGREES = 0.013  # ~1219 meters / 4000 feet
 
     def generate_divisions_preview(
         self, 
@@ -248,14 +251,14 @@ class DivisionManager:
 
             print(f"Creating Voronoi road-aware divisions with {len(roads)} roads")
             
-            # Step 1: Extract road centerlines and create seed points
-            seed_points = self._generate_road_seed_points(roads, polygon, num_divisions)
+            # Step 1: Extract road centerlines and create seed points every 4000 feet
+            seed_points = self._generate_road_seed_points_fixed_distance(roads, polygon)
             
             if len(seed_points) < 2:
                 print("Not enough seed points for Voronoi diagram")
                 return []
 
-            print(f"Generated {len(seed_points)} seed points from roads")
+            print(f"Generated {len(seed_points)} seed points from roads (4000 ft spacing)")
 
             # Step 2: Generate Voronoi diagram
             voronoi_cells = self._generate_voronoi_cells(seed_points, polygon)
@@ -321,8 +324,8 @@ class DivisionManager:
 
             print(f"Creating Voronoi road-aware divisions with {len(roads)} roads")
             
-            # Generate seed points from roads
-            seed_points = self._generate_road_seed_points(roads, search_area, num_divisions)
+            # Generate seed points from roads every 4000 feet
+            seed_points = self._generate_road_seed_points_fixed_distance(roads, search_area)
             
             if len(seed_points) < 2:
                 print("Not enough seed points for Voronoi diagram")
@@ -372,8 +375,8 @@ class DivisionManager:
             print(f"Voronoi road-aware division creation failed: {e}")
             return []
 
-    def _generate_road_seed_points(self, roads: List[LineString], polygon: Polygon, target_divisions: int) -> List[Tuple[float, float]]:
-        """Generate evenly spaced seed points along road centerlines"""
+    def _generate_road_seed_points_fixed_distance(self, roads: List[LineString], polygon: Polygon) -> List[Tuple[float, float]]:
+        """Generate seed points every 4000 feet (~1219m) along road centerlines"""
         try:
             seed_points = []
             
@@ -393,31 +396,32 @@ class DivisionManager:
                     continue
 
             if not major_roads:
+                print("No major roads found within polygon")
                 return []
 
-            # Calculate total road length to determine point spacing
-            total_length = sum(road.length for road in major_roads)
-            
-            # Target spacing based on number of divisions desired
-            # Use more points than divisions to ensure good coverage
-            target_points = max(target_divisions * 2, 10)
-            spacing = total_length / target_points if total_length > 0 else 0.001
+            print(f"Processing {len(major_roads)} roads within polygon")
 
-            print(f"Total road length: {total_length:.6f}, target spacing: {spacing:.6f}")
-
-            # Place points along each road
-            for road in major_roads:
+            # Place points every fixed distance along each road
+            for road_idx, road in enumerate(major_roads):
                 try:
                     road_length = road.length
                     if road_length <= 0:
                         continue
-                        
-                    # Number of points for this road proportional to its length
-                    num_points_on_road = max(1, int(road_length / spacing))
                     
-                    for i in range(num_points_on_road):
+                    # Calculate number of points needed for this road
+                    # Use fixed distance in degrees (approximately 4000 feet)
+                    num_points = max(1, int(road_length / self.SEED_POINT_DISTANCE_DEGREES))
+                    
+                    print(f"Road {road_idx}: length={road_length:.6f} degrees, points={num_points}")
+                    
+                    for i in range(num_points):
                         # Calculate distance along the road
-                        distance = (i / max(1, num_points_on_road - 1)) * road_length if num_points_on_road > 1 else 0.5 * road_length
+                        if num_points == 1:
+                            # Single point at middle of road
+                            distance = road_length * 0.5
+                        else:
+                            # Multiple points evenly spaced
+                            distance = (i / (num_points - 1)) * road_length
                         
                         # Get point at that distance
                         point = road.interpolate(distance)
@@ -427,16 +431,22 @@ class DivisionManager:
                                 seed_points.append((point.x, point.y))
                                 
                 except Exception as e:
-                    print(f"Error placing points on road: {e}")
+                    print(f"Error placing points on road {road_idx}: {e}")
                     continue
 
-            # Add some boundary points to ensure good coverage at edges
+            # Add strategic boundary points for better coverage
             bounds = polygon.bounds
+            margin = min((bounds[2] - bounds[0]), (bounds[3] - bounds[1])) * 0.1
+            
             boundary_points = [
-                (bounds[0] + (bounds[2] - bounds[0]) * 0.1, bounds[1] + (bounds[3] - bounds[1]) * 0.1),
-                (bounds[0] + (bounds[2] - bounds[0]) * 0.9, bounds[1] + (bounds[3] - bounds[1]) * 0.1),
-                (bounds[0] + (bounds[2] - bounds[0]) * 0.1, bounds[1] + (bounds[3] - bounds[1]) * 0.9),
-                (bounds[0] + (bounds[2] - bounds[0]) * 0.9, bounds[1] + (bounds[3] - bounds[1]) * 0.9),
+                (bounds[0] + margin, bounds[1] + margin),  # SW
+                (bounds[2] - margin, bounds[1] + margin),  # SE  
+                (bounds[2] - margin, bounds[3] - margin),  # NE
+                (bounds[0] + margin, bounds[3] - margin),  # NW
+                ((bounds[0] + bounds[2]) / 2, bounds[1] + margin),  # S center
+                ((bounds[0] + bounds[2]) / 2, bounds[3] - margin),  # N center
+                (bounds[0] + margin, (bounds[1] + bounds[3]) / 2),  # W center
+                (bounds[2] - margin, (bounds[1] + bounds[3]) / 2),  # E center
             ]
             
             for bp in boundary_points:
@@ -444,23 +454,25 @@ class DivisionManager:
                 if polygon.contains(boundary_point):
                     seed_points.append(bp)
 
-            # Remove duplicate points
+            # Remove points that are too close together
             unique_points = []
-            tolerance = spacing / 10  # 10% of spacing
+            min_distance = self.SEED_POINT_DISTANCE_DEGREES * 0.3  # 30% of target distance
+            
             for point in seed_points:
-                is_duplicate = False
+                is_too_close = False
                 for existing in unique_points:
-                    if abs(point[0] - existing[0]) < tolerance and abs(point[1] - existing[1]) < tolerance:
-                        is_duplicate = True
+                    distance = ((point[0] - existing[0])**2 + (point[1] - existing[1])**2)**0.5
+                    if distance < min_distance:
+                        is_too_close = True
                         break
-                if not is_duplicate:
+                if not is_too_close:
                     unique_points.append(point)
 
-            print(f"Generated {len(unique_points)} unique seed points")
+            print(f"Generated {len(unique_points)} unique seed points (removed {len(seed_points) - len(unique_points)} too-close points)")
             return unique_points
 
         except Exception as e:
-            print(f"Error generating road seed points: {e}")
+            print(f"Error generating fixed-distance road seed points: {e}")
             return []
 
     def _generate_voronoi_cells(self, seed_points: List[Tuple[float, float]], polygon: Polygon) -> List[Polygon]:
