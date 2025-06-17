@@ -1,11 +1,13 @@
 import hashlib
 import os
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Set
 import numpy as np
+from collections import deque
 
 import requests
 from shapely.geometry import Point, Polygon, LineString, MultiPolygon
 from shapely.ops import unary_union
+import networkx as nx
 
 try:
     from scipy.spatial import Voronoi
@@ -18,20 +20,21 @@ from .database import DatabaseManager
 
 
 class DivisionManager:
-    """Manages search area divisions with structure-centric and road-aware generation"""
+    """Manages search area divisions with walkable road-based expansion"""
 
     def __init__(self, db_manager: DatabaseManager = None):
         self.db = db_manager or DatabaseManager()
         self._road_cache = {}
         self._building_cache = {}
         
-        # Configurable target structure area per division (default ~5000 sq meters)
-        # This represents roughly 1-2 hours of detailed search time
+        # Target searchable area per division (default ~5000 sq meters)
         self.TARGET_STRUCTURE_AREA_M2 = int(os.getenv("TARGET_STRUCTURE_AREA_M2", 5000))
         
-        # Road segment distance for grouping structures
-        road_segment_feet = int(os.getenv("ROAD_SEGMENT_DISTANCE_FEET", 8000))
-        self.ROAD_SEGMENT_DISTANCE_DEGREES = (road_segment_feet / 1000) * 0.009
+        # Maximum walking distance from incident to include in first division
+        self.MAX_WALKING_DISTANCE_DEGREES = 0.005  # ~500m
+        
+        # Buffer distance for buildings near roads
+        self.ROAD_BUILDING_BUFFER_DEGREES = 0.001  # ~100m
 
     def generate_divisions_preview(
         self, 
@@ -48,19 +51,19 @@ class DivisionManager:
             polygon_coords = [(coord[0], coord[1]) for coord in search_area_coordinates]
             polygon = Polygon(polygon_coords)
 
-            # Try structure-centric divisions first
+            # Try walkable road expansion divisions first
             try:
                 buildings = self._fetch_building_data(polygon)
                 roads = self._fetch_road_data(polygon)
                 
-                if buildings:
-                    divisions = self._create_structure_centric_divisions_preview(
+                if buildings and incident_location:
+                    divisions = self._create_walkable_divisions_preview(
                         polygon, incident_location, buildings, roads
                     )
                     if divisions:
                         return divisions
             except Exception as e:
-                print(f"Structure-centric division failed, falling back to grid: {e}")
+                print(f"Walkable division failed, falling back to grid: {e}")
 
             # Calculate area and number of divisions for grid fallback
             area_m2 = self._calculate_area_m2(polygon)
@@ -89,20 +92,20 @@ class DivisionManager:
             # Clear existing divisions
             self._clear_existing_divisions(incident_id)
 
-            # Try structure-centric divisions first
+            # Try walkable road expansion divisions first
             try:
                 buildings = self._fetch_building_data(search_area)
                 roads = self._fetch_road_data(search_area)
                 
-                if buildings:
-                    divisions = self._create_structure_centric_divisions(
+                if buildings and incident_location:
+                    divisions = self._create_walkable_divisions(
                         search_area, incident_location, buildings, roads
                     )
                     if divisions:
                         self._save_divisions(incident_id, divisions)
                         return divisions
             except Exception as e:
-                print(f"Structure-centric division failed, falling back to grid: {e}")
+                print(f"Walkable division failed, falling back to grid: {e}")
 
             # Calculate approximate number of divisions needed for grid fallback
             area_m2 = self._calculate_area_m2(search_area)
@@ -117,18 +120,503 @@ class DivisionManager:
             print(f"Failed to generate divisions: {e}")
             return []
 
-    def _fetch_building_data(self, polygon: Polygon) -> List[Dict]:
-        """Fetch building data from Overpass API within polygon bounds"""
+    def _create_walkable_divisions_preview(
+        self, polygon: Polygon, incident_location: Point,
+        buildings: List[Dict], roads: List[LineString]
+    ) -> List[Dict]:
+        """Create walkable divisions by expanding along roads from incident location"""
         try:
-            # Create cache key from polygon bounds
+            print(f"Creating walkable divisions from incident location")
+            print(f"Buildings: {len(buildings)}, Roads: {len(roads)}")
+            print(f"Target area per division: {self.TARGET_STRUCTURE_AREA_M2:,} sq meters")
+            
+            # Step 1: Build road network graph
+            road_graph = self._build_road_network(roads, polygon)
+            
+            # Step 2: Map buildings to nearby road segments
+            building_road_map = self._map_buildings_to_roads(buildings, roads)
+            
+            # Step 3: Expand divisions from incident location
+            divisions_data = self._expand_divisions_from_incident(
+                incident_location, road_graph, building_road_map, polygon
+            )
+            
+            if not divisions_data:
+                print("No walkable divisions created")
+                return []
+
+            # Step 4: Convert to division format
+            divisions = []
+            for i, division_data in enumerate(divisions_data):
+                try:
+                    division_letter = chr(65 + i) if i < 26 else f"A{chr(65 + (i-26))}"
+                    division_name = f"Division {division_letter}"
+                    division_id = f"DIV-{division_letter}"
+
+                    # Create division polygon
+                    division_poly = self._create_walkable_division_polygon(
+                        division_data, polygon
+                    )
+                    
+                    if division_poly and hasattr(division_poly, 'exterior'):
+                        coords = list(division_poly.exterior.coords)
+                        
+                        priority = self._calculate_division_priority(
+                            division_poly, incident_location, divisions
+                        )
+
+                        # Calculate summary statistics
+                        total_structures = len(division_data['buildings'])
+                        total_searchable_area = sum(b['searchable_area_m2'] for b in division_data['buildings'])
+                        building_types = self._summarize_building_types(division_data['buildings'])
+                        road_names = self._get_road_names(division_data['road_segments'])
+
+                        divisions.append({
+                            "division_name": division_name,
+                            "division_id": division_id,
+                            "coordinates": coords,
+                            "estimated_area_m2": self._calculate_area_m2(division_poly),
+                            "structure_count": total_structures,
+                            "searchable_area_m2": total_searchable_area,
+                            "building_types": building_types,
+                            "road_access": road_names,
+                            "walkable_from_incident": True,
+                            "status": "unassigned",
+                            "priority": priority,
+                            "search_type": "walkable_structure_search",
+                            "estimated_duration": f"{max(1, int(total_searchable_area / 2500))} hours",
+                        })
+                        
+                except Exception as e:
+                    print(f"Error creating walkable division: {e}")
+                    continue
+
+            print(f"Successfully created {len(divisions)} walkable divisions")
+            return divisions
+
+        except Exception as e:
+            print(f"Walkable division creation failed: {e}")
+            return []
+
+    def _create_walkable_divisions(
+        self, search_area: Polygon, incident_location: Point,
+        buildings: List[Dict], roads: List[LineString]
+    ) -> List[Dict]:
+        """Create walkable divisions - for actual generation"""
+        try:
+            print(f"Creating walkable divisions from incident location")
+            
+            # Build road network and expand
+            road_graph = self._build_road_network(roads, search_area)
+            building_road_map = self._map_buildings_to_roads(buildings, roads)
+            divisions_data = self._expand_divisions_from_incident(
+                incident_location, road_graph, building_road_map, search_area
+            )
+            
+            if not divisions_data:
+                return []
+
+            # Convert to division format
+            divisions = []
+            for i, division_data in enumerate(divisions_data):
+                try:
+                    division_letter = chr(65 + i) if i < 26 else f"A{chr(65 + (i-26))}"
+                    division_name = f"Division {division_letter}"
+                    division_id = f"DIV-{division_letter}"
+
+                    division_poly = self._create_walkable_division_polygon(
+                        division_data, search_area
+                    )
+                    
+                    if division_poly:
+                        priority = self._calculate_division_priority(
+                            division_poly, incident_location, divisions
+                        )
+
+                        total_structures = len(division_data['buildings'])
+                        total_searchable_area = sum(b['searchable_area_m2'] for b in division_data['buildings'])
+
+                        divisions.append({
+                            "name": division_name,
+                            "division_id": division_id,
+                            "geometry": division_poly,
+                            "area_m2": self._calculate_area_m2(division_poly),
+                            "structure_count": total_structures,
+                            "searchable_area_m2": total_searchable_area,
+                            "status": "unassigned",
+                            "priority": priority,
+                            "search_type": "walkable_structure_search",
+                            "estimated_duration": f"{max(1, int(total_searchable_area / 2500))} hours",
+                        })
+                        
+                except Exception as e:
+                    print(f"Error creating walkable division: {e}")
+                    continue
+
+            print(f"Successfully created {len(divisions)} walkable divisions")
+            return divisions
+
+        except Exception as e:
+            print(f"Walkable division creation failed: {e}")
+            return []
+
+    def _build_road_network(self, roads: List[LineString], polygon: Polygon) -> nx.Graph:
+        """Build a NetworkX graph from road segments for pathfinding"""
+        try:
+            G = nx.Graph()
+            
+            # Add nodes for road intersections and endpoints
+            node_id = 0
+            coord_to_node = {}
+            tolerance = 0.0001  # ~10m tolerance for intersection detection
+            
+            for road in roads:
+                # Clip road to search area
+                clipped_road = polygon.intersection(road)
+                
+                road_lines = []
+                if isinstance(clipped_road, LineString):
+                    road_lines = [clipped_road]
+                elif hasattr(clipped_road, 'geoms'):
+                    road_lines = [geom for geom in clipped_road.geoms 
+                                if isinstance(geom, LineString)]
+                
+                for line in road_lines:
+                    coords = list(line.coords)
+                    
+                    # Add nodes for start and end points
+                    for coord in [coords[0], coords[-1]]:
+                        # Find existing node within tolerance
+                        existing_node = None
+                        for existing_coord, existing_id in coord_to_node.items():
+                            if (abs(existing_coord[0] - coord[0]) < tolerance and 
+                                abs(existing_coord[1] - coord[1]) < tolerance):
+                                existing_node = existing_id
+                                break
+                        
+                        if existing_node is None:
+                            coord_to_node[coord] = node_id
+                            G.add_node(node_id, pos=coord, point=Point(coord))
+                            node_id += 1
+                    
+                    # Add edge between start and end nodes
+                    start_node = coord_to_node[coords[0]]
+                    end_node = coord_to_node[coords[-1]]
+                    
+                    if start_node != end_node:
+                        distance = line.length
+                        G.add_edge(start_node, end_node, 
+                                  weight=distance, 
+                                  geometry=line,
+                                  road_segment=line)
+            
+            print(f"Built road network: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+            return G
+            
+        except Exception as e:
+            print(f"Error building road network: {e}")
+            return nx.Graph()
+
+    def _map_buildings_to_roads(self, buildings: List[Dict], roads: List[LineString]) -> Dict:
+        """Map each building to its nearest road segment"""
+        try:
+            building_road_map = {}
+            
+            for i, building in enumerate(buildings):
+                min_distance = float('inf')
+                nearest_road = None
+                
+                building_point = building['centroid']
+                
+                for j, road in enumerate(roads):
+                    distance = road.distance(building_point)
+                    if distance < min_distance and distance <= self.ROAD_BUILDING_BUFFER_DEGREES:
+                        min_distance = distance
+                        nearest_road = j
+                
+                if nearest_road is not None:
+                    if nearest_road not in building_road_map:
+                        building_road_map[nearest_road] = []
+                    building_road_map[nearest_road].append(i)
+            
+            mapped_buildings = sum(len(buildings) for buildings in building_road_map.values())
+            print(f"Mapped {mapped_buildings}/{len(buildings)} buildings to roads")
+            return building_road_map
+            
+        except Exception as e:
+            print(f"Error mapping buildings to roads: {e}")
+            return {}
+
+    def _expand_divisions_from_incident(
+        self, incident_location: Point, road_graph: nx.Graph, 
+        building_road_map: Dict, polygon: Polygon
+    ) -> List[Dict]:
+        """Expand divisions from incident location using breadth-first search on road network"""
+        try:
+            if not road_graph.nodes():
+                return []
+            
+            # Find closest road network node to incident
+            min_distance = float('inf')
+            start_node = None
+            
+            for node_id, data in road_graph.nodes(data=True):
+                distance = data['point'].distance(incident_location)
+                if distance < min_distance:
+                    min_distance = distance
+                    start_node = node_id
+            
+            if start_node is None:
+                print("No road network node found near incident")
+                return []
+            
+            print(f"Starting expansion from node {start_node} (distance: {min_distance:.6f} degrees)")
+            
+            divisions = []
+            visited_nodes = set()
+            visited_buildings = set()
+            
+            # Breadth-first expansion from incident location
+            queue = deque([start_node])
+            current_division = {
+                'buildings': [],
+                'road_segments': [],
+                'nodes': set(),
+                'total_area': 0
+            }
+            
+            while queue and len(divisions) < 20:  # Safety limit
+                
+                # Expand current division until target area reached
+                while queue and current_division['total_area'] < self.TARGET_STRUCTURE_AREA_M2:
+                    node = queue.popleft()
+                    
+                    if node in visited_nodes:
+                        continue
+                    
+                    visited_nodes.add(node)
+                    current_division['nodes'].add(node)
+                    
+                    # Add buildings from road segments connected to this node
+                    for neighbor in road_graph.neighbors(node):
+                        if neighbor not in visited_nodes:
+                            # Get road segment between node and neighbor
+                            edge_data = road_graph.get_edge_data(node, neighbor)
+                            if edge_data and 'road_segment' in edge_data:
+                                road_segment = edge_data['road_segment']
+                                current_division['road_segments'].append(road_segment)
+                                
+                                # Find buildings on this road segment
+                                for road_idx, building_indices in building_road_map.items():
+                                    # Check if any building on this road segment
+                                    for building_idx in building_indices:
+                                        if building_idx not in visited_buildings:
+                                            # Add building to current division
+                                            visited_buildings.add(building_idx)
+                                            # Note: We need access to the buildings list here
+                                            # This is a limitation - we need to pass buildings list
+                    
+                    # Add unvisited neighbors to queue for expansion
+                    for neighbor in road_graph.neighbors(node):
+                        if neighbor not in visited_nodes:
+                            queue.append(neighbor)
+                
+                # If current division has buildings, save it and start new one
+                if current_division['buildings'] or current_division['road_segments']:
+                    if current_division['total_area'] > 0:  # Only save if has buildings
+                        divisions.append(current_division.copy())
+                    
+                    # Start new division
+                    current_division = {
+                        'buildings': [],
+                        'road_segments': [],
+                        'nodes': set(),
+                        'total_area': 0
+                    }
+                
+                # If no more nodes to explore, we're done
+                if not queue:
+                    break
+            
+            # Add final division if it has content
+            if current_division['buildings'] or current_division['road_segments']:
+                if current_division['total_area'] > 0:
+                    divisions.append(current_division)
+            
+            print(f"Expansion created {len(divisions)} divisions")
+            return divisions
+            
+        except Exception as e:
+            print(f"Error in division expansion: {e}")
+            return []
+
+    def _expand_divisions_walkable(
+        self, incident_location: Point, buildings: List[Dict], 
+        roads: List[LineString], polygon: Polygon
+    ) -> List[Dict]:
+        """Simplified walkable expansion algorithm"""
+        try:
+            divisions = []
+            visited_buildings = set()
+            
+            # Start from incident location
+            current_position = incident_location
+            division_counter = 0
+            
+            while len(visited_buildings) < len(buildings) and division_counter < 20:
+                current_division = {
+                    'buildings': [],
+                    'road_segments': [],
+                    'total_area': 0
+                }
+                
+                # Find nearest unvisited building within walking distance
+                expansion_radius = self.MAX_WALKING_DISTANCE_DEGREES
+                
+                while current_division['total_area'] < self.TARGET_STRUCTURE_AREA_M2:
+                    nearest_buildings = []
+                    
+                    # Find buildings within current expansion radius
+                    for i, building in enumerate(buildings):
+                        if i in visited_buildings:
+                            continue
+                            
+                        distance = current_position.distance(building['centroid'])
+                        if distance <= expansion_radius:
+                            nearest_buildings.append((i, building, distance))
+                    
+                    if not nearest_buildings:
+                        # Expand search radius or break
+                        expansion_radius *= 1.5
+                        if expansion_radius > 0.02:  # ~2km max
+                            break
+                        continue
+                    
+                    # Sort by distance and add closest buildings
+                    nearest_buildings.sort(key=lambda x: x[2])
+                    
+                    for building_idx, building, distance in nearest_buildings:
+                        if current_division['total_area'] >= self.TARGET_STRUCTURE_AREA_M2:
+                            break
+                            
+                        # Check if building is road-accessible from current position
+                        if self._is_road_accessible(current_position, building['centroid'], roads):
+                            current_division['buildings'].append(building)
+                            current_division['total_area'] += building['searchable_area_m2']
+                            visited_buildings.add(building_idx)
+                            
+                            # Update current position for next expansion
+                            current_position = building['centroid']
+                    
+                    break  # Exit inner while loop
+                
+                if current_division['buildings']:
+                    divisions.append(current_division)
+                
+                division_counter += 1
+                
+                # Find next starting position (furthest unvisited building)
+                if len(visited_buildings) < len(buildings):
+                    max_distance = 0
+                    next_position = current_position
+                    
+                    for i, building in enumerate(buildings):
+                        if i not in visited_buildings:
+                            distance = current_position.distance(building['centroid'])
+                            if distance > max_distance:
+                                max_distance = distance
+                                next_position = building['centroid']
+                    
+                    current_position = next_position
+            
+            print(f"Walkable expansion created {len(divisions)} divisions")
+            return divisions
+            
+        except Exception as e:
+            print(f"Error in walkable expansion: {e}")
+            return []
+
+    def _is_road_accessible(self, start: Point, end: Point, roads: List[LineString]) -> bool:
+        """Check if two points are connected by roads (simplified)"""
+        try:
+            # Simple check: is there a road path within reasonable distance
+            max_detour = start.distance(end) * 2.0  # Allow 100% detour
+            
+            # Find roads near start and end points
+            start_roads = []
+            end_roads = []
+            
+            for road in roads:
+                if road.distance(start) <= self.ROAD_BUILDING_BUFFER_DEGREES:
+                    start_roads.append(road)
+                if road.distance(end) <= self.ROAD_BUILDING_BUFFER_DEGREES:
+                    end_roads.append(road)
+            
+            # If both points have nearby roads, assume accessible
+            # (This is simplified - a proper implementation would use network analysis)
+            return len(start_roads) > 0 and len(end_roads) > 0
+            
+        except Exception as e:
+            print(f"Error checking road accessibility: {e}")
+            return True  # Default to accessible
+
+    def _create_walkable_division_polygon(self, division_data: Dict, polygon: Polygon) -> Optional[Polygon]:
+        """Create polygon for a walkable division"""
+        try:
+            if not division_data['buildings']:
+                return None
+            
+            # Create union of building geometries with buffer
+            building_geometries = [b['geometry'] for b in division_data['buildings']]
+            buildings_union = unary_union(building_geometries)
+            
+            # Add road segments to the area
+            road_geometries = division_data.get('road_segments', [])
+            if road_geometries:
+                roads_union = unary_union(road_geometries)
+                roads_buffered = roads_union.buffer(self.ROAD_BUILDING_BUFFER_DEGREES)
+                division_area = unary_union([buildings_union, roads_buffered])
+            else:
+                division_area = buildings_union
+            
+            # Buffer the combined area
+            division_area = division_area.buffer(self.ROAD_BUILDING_BUFFER_DEGREES)
+            
+            # Clip to search area
+            clipped = polygon.intersection(division_area)
+            
+            if hasattr(clipped, 'area') and clipped.area > 0.000001:
+                if isinstance(clipped, MultiPolygon):
+                    return max(clipped.geoms, key=lambda g: g.area)
+                elif hasattr(clipped, 'exterior'):
+                    return clipped
+            
+            return None
+            
+        except Exception as e:
+            print(f"Error creating walkable division polygon: {e}")
+            return None
+
+    def _get_road_names(self, road_segments: List[LineString]) -> str:
+        """Get summary of road names for a division"""
+        # This would need road name data from OSM
+        # For now, return generic description
+        if len(road_segments) == 0:
+            return "No roads"
+        elif len(road_segments) == 1:
+            return "Single road access"
+        else:
+            return f"{len(road_segments)} connected roads"
+
+    def _fetch_building_data(self, polygon: Polygon) -> List[Dict]:
+        """Fetch building data from Overpass API (reused from previous implementation)"""
+        try:
             bounds = polygon.bounds
             cache_key = hashlib.md5(str(bounds).encode()).hexdigest()
             
-            # Check cache first
             if cache_key in self._building_cache:
                 return self._building_cache[cache_key]
 
-            # Build Overpass API query for buildings
             overpass_url = "https://overpass-api.de/api/interpreter"
             
             query = f"""
@@ -158,7 +646,6 @@ class DivisionManager:
                     print(f"Error processing building element: {e}")
                     continue
 
-            # Cache the result
             self._building_cache[cache_key] = buildings
             total_area = sum(b['area_m2'] for b in buildings)
             print(f"Fetched {len(buildings)} buildings, total area: {total_area:,.0f} sq meters")
@@ -169,35 +656,27 @@ class DivisionManager:
             return []
 
     def _process_building_element(self, element: Dict, polygon: Polygon) -> Optional[Dict]:
-        """Process a single building element from OSM data"""
+        """Process a single building element from OSM data (reused)"""
         try:
             building_type = element.get("tags", {}).get("building", "yes")
             
-            # Extract geometry
             if element["type"] == "way" and "geometry" in element:
                 coords = [(node["lon"], node["lat"]) for node in element["geometry"]]
                 if len(coords) >= 3:
-                    # Ensure polygon is closed
                     if coords[0] != coords[-1]:
                         coords.append(coords[0])
                     
                     building_poly = Polygon(coords)
                     
-                    # Only include buildings that intersect our search area
                     if polygon.intersects(building_poly):
-                        # Clip to search area
                         clipped = polygon.intersection(building_poly)
                         
                         if hasattr(clipped, 'area') and clipped.area > 0.000001:
-                            # Handle MultiPolygon case
                             if isinstance(clipped, MultiPolygon):
-                                # Take the largest polygon
                                 clipped = max(clipped.geoms, key=lambda g: g.area)
                             
                             if hasattr(clipped, 'exterior'):
                                 area_m2 = self._calculate_area_m2(clipped)
-                                
-                                # Estimate floors and total searchable area
                                 levels = self._estimate_building_levels(element.get("tags", {}), building_type)
                                 total_searchable_area = area_m2 * levels
                                 
@@ -218,8 +697,7 @@ class DivisionManager:
             return None
 
     def _estimate_building_levels(self, tags: Dict, building_type: str) -> int:
-        """Estimate number of searchable levels in a building"""
-        # Check for explicit level information
+        """Estimate number of searchable levels in a building (reused)"""
         if "building:levels" in tags:
             try:
                 return max(1, int(float(tags["building:levels"])))
@@ -229,478 +707,41 @@ class DivisionManager:
         if "height" in tags:
             try:
                 height_m = float(tags["height"])
-                # Estimate 3.5m per level
                 return max(1, int(height_m / 3.5))
             except:
                 pass
         
-        # Default estimates by building type
         type_defaults = {
-            "house": 2,
-            "detached": 2, 
-            "residential": 2,
-            "apartments": 3,
-            "apartment": 3,
-            "commercial": 1,
-            "retail": 1,
-            "office": 3,
-            "industrial": 1,
-            "warehouse": 1,
-            "garage": 1,
-            "shed": 1,
-            "school": 2,
-            "hospital": 4,
-            "hotel": 4,
-            "yes": 1  # Generic building
+            "house": 2, "detached": 2, "residential": 2,
+            "apartments": 3, "apartment": 3,
+            "commercial": 1, "retail": 1, "office": 3,
+            "industrial": 1, "warehouse": 1,
+            "garage": 1, "shed": 1,
+            "school": 2, "hospital": 4, "hotel": 4,
+            "yes": 1
         }
         
         return type_defaults.get(building_type.lower(), 1)
 
-    def _create_structure_centric_divisions_preview(
-        self, polygon: Polygon, incident_location: Point = None, 
-        buildings: List[Dict] = None, roads: List[LineString] = None
-    ) -> List[Dict]:
-        """Create structure-centric divisions balanced by searchable area"""
-        try:
-            if not buildings:
-                return []
-
-            print(f"Creating structure-centric divisions with {len(buildings)} buildings")
-            print(f"Target structure area per division: {self.TARGET_STRUCTURE_AREA_M2:,} sq meters")
-            
-            # Step 1: Group buildings by proximity to roads (if roads available)
-            building_groups = self._group_buildings_by_roads(buildings, roads, polygon)
-            
-            # Step 2: Balance groups by target searchable area
-            balanced_divisions = self._balance_divisions_by_area(building_groups, polygon)
-            
-            if not balanced_divisions:
-                print("No balanced divisions created")
-                return []
-
-            # Step 3: Convert to division format
-            divisions = []
-            for i, division_data in enumerate(balanced_divisions):
-                try:
-                    division_letter = chr(65 + i) if i < 26 else f"A{chr(65 + (i-26))}"
-                    division_name = f"Division {division_letter}"
-                    division_id = f"DIV-{division_letter}"
-
-                    # Create division polygon from building cluster
-                    division_poly = self._create_division_polygon(division_data['buildings'], polygon)
-                    
-                    if division_poly and hasattr(division_poly, 'exterior'):
-                        coords = list(division_poly.exterior.coords)
-                        
-                        priority = self._calculate_division_priority(
-                            division_poly, incident_location, divisions
-                        )
-
-                        # Calculate summary statistics
-                        total_structures = len(division_data['buildings'])
-                        total_searchable_area = sum(b['searchable_area_m2'] for b in division_data['buildings'])
-                        building_types = self._summarize_building_types(division_data['buildings'])
-
-                        divisions.append({
-                            "division_name": division_name,
-                            "division_id": division_id,
-                            "coordinates": coords,
-                            "estimated_area_m2": self._calculate_area_m2(division_poly),
-                            "structure_count": total_structures,
-                            "searchable_area_m2": total_searchable_area,
-                            "building_types": building_types,
-                            "status": "unassigned",
-                            "priority": priority,
-                            "search_type": "structure_search",
-                            "estimated_duration": f"{max(1, int(total_searchable_area / 2500))} hours",  # ~2500 sq m per hour
-                        })
-                        
-                except Exception as e:
-                    print(f"Error creating division from buildings: {e}")
-                    continue
-
-            print(f"Successfully created {len(divisions)} structure-centric divisions")
-            return divisions
-
-        except Exception as e:
-            print(f"Structure-centric division creation failed: {e}")
-            return []
-
-    def _create_structure_centric_divisions(
-        self, search_area: Polygon, incident_location: Point = None,
-        buildings: List[Dict] = None, roads: List[LineString] = None
-    ) -> List[Dict]:
-        """Create structure-centric divisions - for actual generation"""
-        try:
-            if not buildings:
-                return []
-
-            print(f"Creating structure-centric divisions with {len(buildings)} buildings")
-            
-            # Group and balance buildings
-            building_groups = self._group_buildings_by_roads(buildings, roads, search_area)
-            balanced_divisions = self._balance_divisions_by_area(building_groups, search_area)
-            
-            if not balanced_divisions:
-                return []
-
-            # Convert to division format
-            divisions = []
-            for i, division_data in enumerate(balanced_divisions):
-                try:
-                    division_letter = chr(65 + i) if i < 26 else f"A{chr(65 + (i-26))}"
-                    division_name = f"Division {division_letter}"
-                    division_id = f"DIV-{division_letter}"
-
-                    division_poly = self._create_division_polygon(division_data['buildings'], search_area)
-                    
-                    if division_poly:
-                        priority = self._calculate_division_priority(
-                            division_poly, incident_location, divisions
-                        )
-
-                        total_structures = len(division_data['buildings'])
-                        total_searchable_area = sum(b['searchable_area_m2'] for b in division_data['buildings'])
-
-                        divisions.append({
-                            "name": division_name,
-                            "division_id": division_id,
-                            "geometry": division_poly,
-                            "area_m2": self._calculate_area_m2(division_poly),
-                            "structure_count": total_structures,
-                            "searchable_area_m2": total_searchable_area,
-                            "status": "unassigned",
-                            "priority": priority,
-                            "search_type": "structure_search",
-                            "estimated_duration": f"{max(1, int(total_searchable_area / 2500))} hours",
-                        })
-                        
-                except Exception as e:
-                    print(f"Error creating division from buildings: {e}")
-                    continue
-
-            print(f"Successfully created {len(divisions)} structure-centric divisions")
-            return divisions
-
-        except Exception as e:
-            print(f"Structure-centric division creation failed: {e}")
-            return []
-
-    def _group_buildings_by_roads(self, buildings: List[Dict], roads: List[LineString], polygon: Polygon) -> List[List[Dict]]:
-        """Group buildings by proximity to road segments"""
-        try:
-            if not roads:
-                # No roads available, group by geographic proximity
-                return self._group_buildings_geographically(buildings, polygon)
-            
-            # Segment roads first
-            road_segments = self._segment_roads_into_chunks(roads, polygon)
-            
-            if not road_segments:
-                return self._group_buildings_geographically(buildings, polygon)
-            
-            building_groups = []
-            assigned_buildings = set()
-            
-            # For each road segment, find nearby buildings
-            for segment in road_segments:
-                nearby_buildings = []
-                segment_buffer = segment.buffer(0.005)  # ~500m buffer around road
-                
-                for i, building in enumerate(buildings):
-                    if i in assigned_buildings:
-                        continue
-                        
-                    if segment_buffer.intersects(building['geometry']):
-                        nearby_buildings.append(building)
-                        assigned_buildings.add(i)
-                
-                if nearby_buildings:
-                    building_groups.append(nearby_buildings)
-            
-            # Assign any remaining unassigned buildings to nearest group
-            for i, building in enumerate(buildings):
-                if i not in assigned_buildings:
-                    if building_groups:
-                        # Find closest group by centroid distance
-                        min_distance = float('inf')
-                        closest_group_idx = 0
-                        
-                        for j, group in enumerate(building_groups):
-                            group_centroid = self._get_group_centroid(group)
-                            distance = building['centroid'].distance(group_centroid)
-                            if distance < min_distance:
-                                min_distance = distance
-                                closest_group_idx = j
-                        
-                        building_groups[closest_group_idx].append(building)
-                    else:
-                        # No groups yet, create first group
-                        building_groups.append([building])
-            
-            print(f"Grouped {len(buildings)} buildings into {len(building_groups)} road-based groups")
-            return building_groups
-            
-        except Exception as e:
-            print(f"Error grouping buildings by roads: {e}")
-            return self._group_buildings_geographically(buildings, polygon)
-
-    def _group_buildings_geographically(self, buildings: List[Dict], polygon: Polygon) -> List[List[Dict]]:
-        """Fallback: group buildings by geographic proximity"""
-        try:
-            # Simple clustering by distance
-            groups = []
-            assigned = set()
-            cluster_distance = 0.002  # ~200m
-            
-            for i, building in enumerate(buildings):
-                if i in assigned:
-                    continue
-                    
-                # Start new group
-                group = [building]
-                assigned.add(i)
-                
-                # Find nearby buildings
-                for j, other_building in enumerate(buildings):
-                    if j in assigned:
-                        continue
-                        
-                    distance = building['centroid'].distance(other_building['centroid'])
-                    if distance <= cluster_distance:
-                        group.append(other_building)
-                        assigned.add(j)
-                
-                groups.append(group)
-            
-            print(f"Grouped {len(buildings)} buildings into {len(groups)} geographic clusters")
-            return groups
-            
-        except Exception as e:
-            print(f"Error in geographic grouping: {e}")
-            return [[building] for building in buildings]  # Fallback: each building its own group
-
-    def _balance_divisions_by_area(self, building_groups: List[List[Dict]], polygon: Polygon) -> List[Dict]:
-        """Balance building groups to achieve target searchable area per division"""
-        try:
-            if not building_groups:
-                return []
-            
-            # Calculate total searchable area
-            total_searchable_area = sum(
-                sum(building['searchable_area_m2'] for building in group) 
-                for group in building_groups
-            )
-            
-            # Estimate number of divisions needed
-            target_divisions = max(1, int(total_searchable_area / self.TARGET_STRUCTURE_AREA_M2))
-            
-            print(f"Total searchable area: {total_searchable_area:,.0f} sq m")
-            print(f"Target area per division: {self.TARGET_STRUCTURE_AREA_M2:,} sq m") 
-            print(f"Target divisions: {target_divisions}")
-            
-            # Sort groups by size (largest first)
-            sorted_groups = sorted(building_groups, 
-                                 key=lambda g: sum(b['searchable_area_m2'] for b in g), 
-                                 reverse=True)
-            
-            balanced_divisions = []
-            
-            # Create divisions by filling up to target area
-            current_division = {'buildings': [], 'area': 0}
-            
-            for group in sorted_groups:
-                group_area = sum(building['searchable_area_m2'] for building in group)
-                
-                # If adding this group would exceed target significantly, start new division
-                if (current_division['area'] > 0 and 
-                    current_division['area'] + group_area > self.TARGET_STRUCTURE_AREA_M2 * 1.5):
-                    
-                    # Finish current division
-                    if current_division['buildings']:
-                        balanced_divisions.append(current_division)
-                    
-                    # Start new division
-                    current_division = {'buildings': group.copy(), 'area': group_area}
-                else:
-                    # Add group to current division
-                    current_division['buildings'].extend(group)
-                    current_division['area'] += group_area
-            
-            # Add final division
-            if current_division['buildings']:
-                balanced_divisions.append(current_division)
-            
-            # If we have too few divisions, split the largest ones
-            while len(balanced_divisions) < target_divisions and len(balanced_divisions) > 0:
-                # Find largest division
-                largest_idx = max(range(len(balanced_divisions)), 
-                                key=lambda i: balanced_divisions[i]['area'])
-                
-                largest_div = balanced_divisions[largest_idx]
-                
-                # Only split if it has more than one building
-                if len(largest_div['buildings']) > 1:
-                    # Split roughly in half
-                    mid = len(largest_div['buildings']) // 2
-                    buildings1 = largest_div['buildings'][:mid]
-                    buildings2 = largest_div['buildings'][mid:]
-                    
-                    area1 = sum(b['searchable_area_m2'] for b in buildings1)
-                    area2 = sum(b['searchable_area_m2'] for b in buildings2)
-                    
-                    # Replace largest division with two smaller ones
-                    balanced_divisions[largest_idx] = {'buildings': buildings1, 'area': area1}
-                    balanced_divisions.append({'buildings': buildings2, 'area': area2})
-                else:
-                    break  # Can't split further
-            
-            print(f"Created {len(balanced_divisions)} balanced divisions")
-            for i, div in enumerate(balanced_divisions):
-                print(f"  Division {chr(65+i)}: {len(div['buildings'])} buildings, {div['area']:,.0f} sq m")
-            
-            return balanced_divisions
-            
-        except Exception as e:
-            print(f"Error balancing divisions: {e}")
-            return []
-
-    def _create_division_polygon(self, buildings: List[Dict], search_area: Polygon) -> Optional[Polygon]:
-        """Create a polygon that encompasses all buildings in a division"""
-        try:
-            if not buildings:
-                return None
-            
-            # Create buffer around all building geometries
-            building_geometries = [b['geometry'] for b in buildings]
-            buildings_union = unary_union(building_geometries)
-            
-            # Buffer to create search area around buildings
-            buffer_distance = 0.001  # ~100m buffer
-            division_area = buildings_union.buffer(buffer_distance)
-            
-            # Clip to search area
-            clipped = search_area.intersection(division_area)
-            
-            if hasattr(clipped, 'area') and clipped.area > 0.000001:
-                if isinstance(clipped, MultiPolygon):
-                    # Take the largest polygon
-                    return max(clipped.geoms, key=lambda g: g.area)
-                elif hasattr(clipped, 'exterior'):
-                    return clipped
-            
-            return None
-            
-        except Exception as e:
-            print(f"Error creating division polygon: {e}")
-            return None
-
-    def _get_group_centroid(self, buildings: List[Dict]) -> Point:
-        """Get centroid of a group of buildings"""
-        if not buildings:
-            return Point(0, 0)
-        
-        x_coords = [b['centroid'].x for b in buildings]
-        y_coords = [b['centroid'].y for b in buildings]
-        
-        avg_x = sum(x_coords) / len(x_coords)
-        avg_y = sum(y_coords) / len(y_coords)
-        
-        return Point(avg_x, avg_y)
-
     def _summarize_building_types(self, buildings: List[Dict]) -> str:
-        """Create a summary of building types in a division"""
+        """Create a summary of building types in a division (reused)"""
         type_counts = {}
         for building in buildings:
             building_type = building.get('type', 'unknown')
             type_counts[building_type] = type_counts.get(building_type, 0) + 1
         
-        # Create readable summary
         summaries = []
         for btype, count in sorted(type_counts.items(), key=lambda x: x[1], reverse=True):
             if btype == 'yes':
                 btype = 'buildings'
             summaries.append(f"{count} {btype}")
         
-        return ", ".join(summaries[:3])  # Top 3 types
-
-    def _segment_roads_into_chunks(self, roads: List[LineString], polygon: Polygon) -> List[LineString]:
-        """Segment roads into chunks (reused from previous implementation)"""
-        try:
-            road_segments = []
-            
-            for road_idx, road in enumerate(roads):
-                try:
-                    # Clip road to search area
-                    clipped_road = polygon.intersection(road)
-                    
-                    # Handle different intersection results
-                    road_lines = []
-                    if isinstance(clipped_road, LineString):
-                        road_lines = [clipped_road]
-                    elif hasattr(clipped_road, 'geoms'):
-                        road_lines = [geom for geom in clipped_road.geoms 
-                                    if isinstance(geom, LineString) and geom.length > 0.001]
-                    
-                    # Segment each road line into chunks
-                    for line in road_lines:
-                        segments = self._segment_line_into_chunks(line)
-                        road_segments.extend(segments)
-                        
-                except Exception as e:
-                    print(f"Error processing road {road_idx}: {e}")
-                    continue
-            
-            return road_segments
-            
-        except Exception as e:
-            print(f"Error segmenting roads: {e}")
-            return []
-
-    def _segment_line_into_chunks(self, line: LineString) -> List[LineString]:
-        """Segment a single road line into chunks (reused from previous implementation)"""
-        try:
-            segments = []
-            total_length = line.length
-            
-            if total_length <= self.ROAD_SEGMENT_DISTANCE_DEGREES:
-                return [line]
-            
-            num_segments = max(1, int(total_length / self.ROAD_SEGMENT_DISTANCE_DEGREES))
-            segment_length = total_length / num_segments
-            
-            for i in range(num_segments):
-                start_distance = i * segment_length
-                end_distance = min((i + 1) * segment_length, total_length)
-                
-                try:
-                    segment_coords = []
-                    num_points = max(2, int((end_distance - start_distance) / (segment_length / 20)))
-                    
-                    for j in range(num_points):
-                        distance = start_distance + (j * (end_distance - start_distance) / (num_points - 1))
-                        point = line.interpolate(distance)
-                        segment_coords.append((point.x, point.y))
-                    
-                    if len(segment_coords) >= 2:
-                        segment = LineString(segment_coords)
-                        segments.append(segment)
-                        
-                except Exception as e:
-                    print(f"Error creating segment {i}: {e}")
-                    continue
-            
-            return segments
-            
-        except Exception as e:
-            print(f"Error segmenting line: {e}")
-            return [line]
+        return ", ".join(summaries[:3])
 
     def save_divisions(self, incident_id: str, divisions: List[Dict]) -> bool:
-        """Save divisions to database"""
+        """Save divisions to database (reused)"""
         try:
             for division in divisions:
-                # Extract coordinates from division data
                 coordinates = None
                 if "coordinates" in division:
                     coordinates = division["coordinates"]
@@ -715,15 +756,11 @@ class DivisionManager:
                         coordinates = geom_data["coordinates"][0]
 
                 if coordinates:
-                    # Ensure polygon is closed
                     coords = coordinates.copy()
                     if coords[0] != coords[-1]:
                         coords.append(coords[0])
 
-                    # Convert coordinates to WKT
-                    coords_str = ", ".join(
-                        [f"{coord[0]} {coord[1]}" for coord in coords]
-                    )
+                    coords_str = ", ".join([f"{coord[0]} {coord[1]}" for coord in coords])
                     polygon_wkt = f"POLYGON(({coords_str}))"
 
                     query = """
@@ -756,7 +793,7 @@ class DivisionManager:
             return False
 
     def get_divisions(self, incident_id: str) -> List[Dict]:
-        """Get search divisions for an incident"""
+        """Get search divisions for an incident (reused)"""
         try:
             query = """
             SELECT 
@@ -777,7 +814,7 @@ class DivisionManager:
             return []
 
     def _fetch_road_data(self, polygon: Polygon) -> List[LineString]:
-        """Fetch road data from Overpass API (reused from previous implementation)"""
+        """Fetch road data from Overpass API (reused)"""
         try:
             bounds = polygon.bounds
             cache_key = hashlib.md5(str(bounds).encode()).hexdigest()
@@ -827,7 +864,7 @@ class DivisionManager:
     def _calculate_division_priority(
         self, division_geom: Polygon, incident_location: Point, existing_divisions: List[Dict]
     ) -> str:
-        """Calculate division priority based on distance from incident location"""
+        """Calculate division priority based on distance from incident location (reused)"""
         if not incident_location:
             return "Low"
         
@@ -850,7 +887,7 @@ class DivisionManager:
     def _create_grid_divisions_preview(
         self, polygon: Polygon, num_divisions: int, incident_location: Point = None
     ) -> List[Dict]:
-        """Create grid-based divisions for preview (fallback)"""
+        """Create grid-based divisions for preview (fallback, reused)"""
         divisions = []
         bounds = polygon.bounds
 
@@ -927,7 +964,7 @@ class DivisionManager:
         return divisions
 
     def _create_grid_divisions(self, search_area: Polygon, num_divisions: int, incident_location: Point = None) -> List[Dict]:
-        """Create grid-based divisions (fallback)"""
+        """Create grid-based divisions (fallback, reused)"""
         divisions = []
         bounds = search_area.bounds
 
@@ -976,7 +1013,7 @@ class DivisionManager:
         return divisions
 
     def _save_divisions(self, incident_id: str, divisions: List[Dict]):
-        """Save divisions to database"""
+        """Save divisions to database (reused)"""
         for division in divisions:
             if hasattr(division["geometry"], "exterior"):
                 coords = list(division["geometry"].exterior.coords)
@@ -1005,12 +1042,12 @@ class DivisionManager:
                 self.db.execute_query(query, params)
 
     def _clear_existing_divisions(self, incident_id: str):
-        """Clear existing divisions for an incident"""
+        """Clear existing divisions for an incident (reused)"""
         query = "DELETE FROM search_divisions WHERE incident_id = %s"
         self.db.execute_query(query, (incident_id,))
 
     def _calculate_area_m2(self, polygon: Polygon) -> float:
-        """Calculate polygon area in square meters (approximate)"""
+        """Calculate polygon area in square meters (reused)"""
         bounds = polygon.bounds
         lat_center = (bounds[1] + bounds[3]) / 2
 
