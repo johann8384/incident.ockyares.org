@@ -28,6 +28,14 @@ function getStatusBadgeClass(status) {
     }
 }
 
+// Helper function to get progress bar color based on percentage
+function getProgressBarClass(percentage) {
+    if (percentage >= 80) return 'bg-success';
+    if (percentage >= 50) return 'bg-warning';
+    if (percentage >= 25) return 'bg-info';
+    return 'bg-danger';
+}
+
 // Initialize map
 function initMap() {
     map = L.map('map').setView([38.3960874, -85.4425145], 13); // Default to Louisville, KY
@@ -690,13 +698,18 @@ function displayDivisionsOnMap(divisions) {
                 })
             }).addTo(divisionsGroup);
             
-            // UPDATED POPUP CONTENT - SIMPLIFIED
+            // UPDATED POPUP CONTENT WITH PERCENTAGE
+            const percentage = division.percentage_complete || 0;
+            const progressBar = percentage > 0 ? 
+                `<div class="mt-2"><strong>Progress:</strong> ${percentage}%<br><div class="progress" style="height: 8px;"><div class="progress-bar ${getProgressBarClass(percentage)}" style="width: ${percentage}%;"></div></div></div>` : '';
+            
             const popupContent = `
                 <b>${division.division_name || division.name}</b><br>
                 <strong>Priority:</strong> ${division.priority || 'Low'}<br>
                 <strong>Status:</strong> ${(division.status || 'unassigned').toUpperCase()}<br>
                 <strong>Unit:</strong> ${division.assigned_unit_id || 'Not assigned'}<br>
                 <strong>Officer:</strong> ${division.team_leader || 'Not assigned'}
+                ${progressBar}
             `;
             
             divisionPolygon.bindPopup(popupContent);
@@ -726,30 +739,43 @@ function displayDivisions(divisions) {
     const completedDivisions = divisions.filter(d => d.status === 'completed').length;
     const unassignedDivisions = totalDivisions - assignedDivisions - completedDivisions;
     
+    // Calculate overall progress
+    const totalProgress = divisions.reduce((sum, d) => sum + (d.percentage_complete || 0), 0);
+    const averageProgress = divisions.length > 0 ? Math.round(totalProgress / divisions.length) : 0;
+    
     summary.innerHTML = `
         <div class="row g-2">
-            <div class="col-sm-3">
+            <div class="col-sm-2">
                 <div class="text-center">
                     <div class="fs-4 fw-bold text-primary">${totalDivisions}</div>
                     <small class="text-muted">Total</small>
                 </div>
             </div>
-            <div class="col-sm-3">
+            <div class="col-sm-2">
                 <div class="text-center">
                     <div class="fs-4 fw-bold text-success">${assignedDivisions}</div>
                     <small class="text-muted">Assigned</small>
                 </div>
             </div>
-            <div class="col-sm-3">
+            <div class="col-sm-2">
                 <div class="text-center">
                     <div class="fs-4 fw-bold text-info">${completedDivisions}</div>
                     <small class="text-muted">Completed</small>
                 </div>
             </div>
-            <div class="col-sm-3">
+            <div class="col-sm-2">
                 <div class="text-center">
                     <div class="fs-4 fw-bold text-warning">${unassignedDivisions}</div>
                     <small class="text-muted">Unassigned</small>
+                </div>
+            </div>
+            <div class="col-sm-4">
+                <div class="text-center">
+                    <div class="fs-4 fw-bold text-secondary">${averageProgress}%</div>
+                    <small class="text-muted">Overall Progress</small>
+                    <div class="progress mt-1" style="height: 8px;">
+                        <div class="progress-bar ${getProgressBarClass(averageProgress)}" style="width: ${averageProgress}%;"></div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -765,6 +791,9 @@ function displayDivisions(divisions) {
         
         const priorityClass = division.priority === 'High' ? 'danger' :
                              division.priority === 'Medium' ? 'warning' : 'secondary';
+        
+        const percentage = division.percentage_complete || 0;
+        const lastUpdate = division.last_update ? new Date(division.last_update).toLocaleString() : null;
         
         return `
             <div class="col-md-6 col-lg-4">
@@ -782,6 +811,20 @@ function displayDivisions(divisions) {
                         <div class="mb-2">
                             <span class="badge bg-${statusClass}">${(division.status || 'unassigned').toUpperCase()}</span>
                         </div>
+                        
+                        <!-- Progress Display -->
+                        ${percentage > 0 ? `
+                            <div class="mb-3">
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <small class="text-muted">Progress</small>
+                                    <small class="fw-bold">${percentage}%</small>
+                                </div>
+                                <div class="progress" style="height: 8px;">
+                                    <div class="progress-bar ${getProgressBarClass(percentage)}" style="width: ${percentage}%;"></div>
+                                </div>
+                                ${lastUpdate ? `<small class="text-muted">Updated: ${lastUpdate}</small>` : ''}
+                            </div>
+                        ` : ''}
                         
                         <!-- Unit Assignment -->
                         <div class="mb-3">
@@ -809,6 +852,8 @@ function displayDivisions(divisions) {
                             <div><strong>Team:</strong> ${division.assigned_team || '<em>Not assigned</em>'}</div>
                             ${division.team_leader ? `<div><strong>Leader:</strong> ${division.team_leader}</div>` : ''}
                             ${division.assigned_unit_id ? `<div><strong>Unit:</strong> ${division.assigned_unit_id}</div>` : ''}
+                            ${division.unit_name ? `<div><strong>Unit Name:</strong> ${division.unit_name}</div>` : ''}
+                            ${division.unit_leader ? `<div><strong>Unit Leader:</strong> ${division.unit_leader}</div>` : ''}
                         </div>
                     </div>
                 </div>
