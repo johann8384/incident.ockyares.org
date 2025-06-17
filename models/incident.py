@@ -9,6 +9,7 @@ from shapely.geometry import Point, Polygon
 
 from .database import DatabaseManager
 from .hospital import Hospital
+from .division import DivisionManager
 
 
 class Incident:
@@ -17,6 +18,7 @@ class Incident:
     def __init__(self, db_manager: DatabaseManager = None):
         self.db = db_manager or DatabaseManager()
         self.hospital_manager = Hospital(self.db)
+        self.division_manager = DivisionManager(self.db)
         self.incident_id = None
         self.name = None
         self.incident_type = None
@@ -102,7 +104,7 @@ class Incident:
 
         # Save divisions if provided
         if divisions:
-            self.save_divisions(divisions)
+            self.division_manager.save_divisions(self.incident_id, divisions)
 
         return self.incident_id
 
@@ -110,141 +112,29 @@ class Incident:
         self, search_area_coordinates: List, area_size_m2: int = 40000
     ) -> List[Dict]:
         """Generate divisions for preview without saving to database"""
-        try:
-            if not search_area_coordinates or len(search_area_coordinates) < 3:
-                raise ValueError("At least 3 coordinates required for search area")
+        return self.division_manager.generate_divisions_preview(
+            search_area_coordinates, area_size_m2, self.incident_location
+        )
 
-            # Convert coordinates to shapely polygon
-            # search_area_coordinates are in lng,lat format
-            polygon_coords = [(coord[0], coord[1]) for coord in search_area_coordinates]
-            polygon = Polygon(polygon_coords)
+    def generate_divisions(self) -> List[Dict]:
+        """Generate search divisions based on search area and team capacity"""
+        if not self.search_area:
+            raise ValueError("Search area must be set before generating divisions")
 
-            # Calculate area and number of divisions
-            area_m2 = self._calculate_area_m2(polygon)
-            num_divisions = max(1, int(area_m2 / area_size_m2))
-
-            # Generate divisions with priority calculation
-            divisions = self._create_grid_divisions_preview(
-                polygon, num_divisions, self.incident_location
-            )
-
-            return divisions
-
-        except Exception as e:
-            print(f"Failed to generate divisions preview: {e}")
-            raise e
-
-    def _calculate_division_priority(
-        self, division_geom: Polygon, incident_location: Point, existing_divisions: List[Dict]
-    ) -> str:
-        """
-        Calculate division priority based on distance from incident location
-        Priority rules:
-        - High: Division containing incident location + adjacent divisions
-        - Medium: Divisions adjacent to High priority divisions  
-        - Low: All other divisions
-        """
-        if not incident_location:
-            return "Low"
-        
-        # Check if this division contains the incident location
-        if division_geom.contains(incident_location):
-            return "High"
-        
-        # Find High priority divisions already created
-        high_priority_divisions = [
-            div for div in existing_divisions if div.get("priority") == "High"
-        ]
-        
-        # If no High priority division exists yet, check distance to incident
-        if not high_priority_divisions:
-            # Calculate distance from division centroid to incident location
-            division_centroid = division_geom.centroid
-            distance = division_centroid.distance(incident_location)
-            
-            # If very close to incident (roughly adjacent), make it High
-            # Using a small threshold based on typical division size
-            bounds = division_geom.bounds
-            division_size = max(bounds[2] - bounds[0], bounds[3] - bounds[1])
-            
-            if distance <= division_size * 1.5:  # Within 1.5 division widths
-                return "High"
-        else:
-            # Check if adjacent to any High priority division
-            for high_div in high_priority_divisions:
-                if "coordinates" in high_div:
-                    high_geom = Polygon(high_div["coordinates"])
-                    # Check if divisions are adjacent (touching or very close)
-                    if division_geom.touches(high_geom) or division_geom.distance(high_geom) < 0.001:
-                        return "High"
-        
-        # Check if adjacent to any High priority division for Medium priority
-        for existing_div in existing_divisions:
-            if existing_div.get("priority") == "High" and "coordinates" in existing_div:
-                existing_geom = Polygon(existing_div["coordinates"])
-                if division_geom.touches(existing_geom) or division_geom.distance(existing_geom) < 0.001:
-                    return "Medium"
-        
-        return "Low"
+        return self.division_manager.generate_divisions(
+            self.incident_id, 
+            self.search_area, 
+            self.search_area_size_m2, 
+            self.incident_location
+        )
 
     def save_divisions(self, divisions: List[Dict]) -> bool:
         """Save divisions to database"""
-        try:
-            for division in divisions:
-                # Extract coordinates from division data
-                coordinates = None
-                if "coordinates" in division:
-                    coordinates = division["coordinates"]
-                elif "geom" in division and division["geom"]:
-                    # Parse geometry if it's in different format
-                    geom_data = (
-                        json.loads(division["geom"])
-                        if isinstance(division["geom"], str)
-                        else division["geom"]
-                    )
-                    if "coordinates" in geom_data:
-                        coordinates = geom_data["coordinates"][0]  # Get outer ring
+        return self.division_manager.save_divisions(self.incident_id, divisions)
 
-                if coordinates:
-                    # Ensure polygon is closed
-                    coords = coordinates.copy()
-                    if coords[0] != coords[-1]:
-                        coords.append(coords[0])
-
-                    # Convert coordinates to WKT
-                    coords_str = ", ".join(
-                        [f"{coord[0]} {coord[1]}" for coord in coords]
-                    )
-                    polygon_wkt = f"POLYGON(({coords_str}))"
-
-                    query = """
-                    INSERT INTO search_divisions 
-                    (incident_id, division_name, division_id, area_geometry, 
-                     estimated_area_m2, status, priority, 
-                     search_type, estimated_duration, assigned_team)
-                    VALUES (%s, %s, %s, ST_GeomFromText(%s, 4326), %s, %s, %s, %s, %s, %s)
-                    """
-
-                    params = (
-                        self.incident_id,
-                        division.get("division_name", division.get("name")),
-                        division.get("division_id"),
-                        polygon_wkt,
-                        division.get("estimated_area_m2", 0),
-                        division.get("status", "unassigned"),
-                        division.get("priority", "Low"),
-                        division.get("search_type", "primary"),
-                        division.get("estimated_duration", "2 hours"),
-                        division.get("assigned_team"),
-                    )
-
-                    self.db.execute_query(query, params)
-
-            return True
-
-        except Exception as e:
-            print(f"Failed to save divisions: {e}")
-            return False
+    def get_divisions(self) -> List[Dict]:
+        """Get search divisions for this incident"""
+        return self.division_manager.get_divisions(self.incident_id)
 
     def set_location(self, latitude: float, longitude: float) -> bool:
         """Set incident location and reverse geocode to address"""
@@ -356,58 +246,6 @@ class Incident:
             print(f"Failed to get incident data: {e}")
             return {}
 
-    def get_divisions(self) -> List[Dict]:
-        """Get search divisions for this incident"""
-        try:
-            query = """
-            SELECT 
-                id, division_name, division_id, estimated_area_m2,
-                assigned_team, team_leader, priority, search_type,
-                estimated_duration, status, assigned_unit_id,
-                ST_AsGeoJSON(area_geometry) as geometry_geojson
-            FROM search_divisions
-            WHERE incident_id = %s
-            ORDER BY priority DESC, division_name
-            """
-
-            result = self.db.execute_query(query, (self.incident_id,), fetch=True)
-            return [dict(row) for row in result] if result else []
-
-        except Exception as e:
-            print(f"Failed to get divisions: {e}")
-            return []
-
-    def generate_divisions(self) -> List[Dict]:
-        """Generate search divisions based on search area and team capacity"""
-        if not self.search_area:
-            raise ValueError("Search area must be set before generating divisions")
-
-        try:
-            # Clear existing divisions
-            self._clear_existing_divisions()
-
-            # Calculate approximate number of divisions needed
-            area_m2 = self._calculate_area_m2(self.search_area)
-            num_divisions = max(1, int(area_m2 / self.search_area_size_m2))
-
-            # For now, create simple grid divisions
-            # TODO: Integrate with OSM road data for better alignment
-            divisions = self._create_grid_divisions(num_divisions)
-
-            # Save divisions to database
-            self._save_divisions(divisions)
-
-            return divisions
-
-        except Exception as e:
-            print(f"Failed to generate divisions: {e}")
-            return []
-
-    def _clear_existing_divisions(self):
-        """Clear existing divisions for this incident"""
-        query = "DELETE FROM search_divisions WHERE incident_id = %s"
-        self.db.execute_query(query, (self.incident_id,))
-
     def _reverse_geocode(self, latitude: float, longitude: float) -> str:
         """Reverse geocode coordinates to address using Nominatim"""
         try:
@@ -436,210 +274,6 @@ class Incident:
         except Exception as e:
             print(f"Reverse geocoding failed: {e}")
             return f"{latitude}, {longitude}"
-
-    def _calculate_area_m2(self, polygon: Polygon) -> float:
-        """Calculate polygon area in square meters (approximate)"""
-        # Simple approximation - for production use proper geodetic calculations
-        bounds = polygon.bounds
-        lat_center = (bounds[1] + bounds[3]) / 2
-
-        # Rough conversion from degrees to meters at given latitude
-        lat_m_per_deg = 111132.92 - 559.82 * (lat_center * 0.0174533) ** 2
-        lng_m_per_deg = 111412.84 * (1 - (lat_center * 0.0174533) ** 2) ** 0.5
-
-        area_deg2 = polygon.area
-        area_m2 = area_deg2 * lat_m_per_deg * lng_m_per_deg
-
-        return abs(area_m2)
-
-    def _create_grid_divisions_preview(
-        self, polygon: Polygon, num_divisions: int, incident_location: Point = None
-    ) -> List[Dict]:
-        """Create grid-based divisions for preview"""
-        divisions = []
-        bounds = polygon.bounds
-
-        # Ensure polygon is valid
-        if not polygon.is_valid:
-            polygon = polygon.buffer(0)  # Fix invalid geometry
-
-        # Calculate grid dimensions
-        cols = int((num_divisions**0.5)) if num_divisions > 1 else 1
-        rows = int(num_divisions / cols) + (1 if num_divisions % cols else 0)
-
-        width = (bounds[2] - bounds[0]) / cols
-        height = (bounds[3] - bounds[1]) / rows
-
-        division_counter = 0
-        for row in range(rows):
-            for col in range(cols):
-                if division_counter >= num_divisions:
-                    break
-
-                # Create grid cell with small buffer to avoid edge cases
-                x1 = bounds[0] + col * width
-                y1 = bounds[1] + row * height
-                x2 = x1 + width
-                y2 = y1 + height
-
-                cell = Polygon([(x1, y1), (x2, y1), (x2, y2), (x1, y2)])
-
-                # Ensure cell is valid
-                if not cell.is_valid:
-                    cell = cell.buffer(0)
-
-                try:
-                    # Clip to search area with safety checks
-                    if polygon.intersects(cell):
-                        clipped = polygon.intersection(cell)
-
-                        # Handle different geometry types returned by intersection
-                        if hasattr(clipped, "area") and clipped.area > 0:
-                            # Only process if it's a valid polygon-like geometry
-                            if hasattr(clipped, "exterior"):
-                                coords = list(clipped.exterior.coords)
-                            elif hasattr(clipped, "geoms"):
-                                # MultiPolygon case - take the largest polygon
-                                largest = max(
-                                    clipped.geoms,
-                                    key=lambda g: g.area if hasattr(g, "area") else 0,
-                                )
-                                if hasattr(largest, "exterior"):
-                                    coords = list(largest.exterior.coords)
-                                    clipped = largest
-                                else:
-                                    continue
-                            else:
-                                # Fallback to grid cell
-                                coords = [
-                                    (x1, y1),
-                                    (x2, y1),
-                                    (x2, y2),
-                                    (x1, y2),
-                                    (x1, y1),
-                                ]
-                                clipped = cell
-
-                            division_letter = chr(
-                                65 + division_counter
-                            )  # A, B, C, etc.
-                            division_name = f"Division {division_letter}"
-                            division_id = f"DIV-{division_letter}"
-
-                            # Calculate priority based on distance from incident location
-                            priority = self._calculate_division_priority(
-                                clipped, incident_location, divisions
-                            )
-
-                            divisions.append(
-                                {
-                                    "division_name": division_name,
-                                    "division_id": division_id,
-                                    "coordinates": coords,
-                                    "estimated_area_m2": self._calculate_area_m2(
-                                        clipped
-                                    ),
-                                    "status": "unassigned",
-                                    "priority": priority,
-                                    "search_type": "primary",
-                                    "estimated_duration": "2 hours",
-                                }
-                            )
-
-                            division_counter += 1
-
-                except Exception as e:
-                    print(f"Error processing grid cell {row},{col}: {e}")
-                    # Skip this cell and continue
-                    continue
-
-        return divisions
-
-    def _create_grid_divisions(self, num_divisions: int) -> List[Dict]:
-        """Create grid-based divisions"""
-        divisions = []
-        bounds = self.search_area.bounds
-
-        # Calculate grid dimensions
-        cols = int((num_divisions**0.5))
-        rows = int(num_divisions / cols) + (1 if num_divisions % cols else 0)
-
-        width = (bounds[2] - bounds[0]) / cols
-        height = (bounds[3] - bounds[1]) / rows
-
-        division_counter = 0
-        for row in range(rows):
-            for col in range(cols):
-                if division_counter >= num_divisions:
-                    break
-
-                # Create grid cell
-                x1 = bounds[0] + col * width
-                y1 = bounds[1] + row * height
-                x2 = x1 + width
-                y2 = y1 + height
-
-                cell = Polygon([(x1, y1), (x2, y1), (x2, y2), (x1, y2)])
-
-                # Clip to search area
-                clipped = self.search_area.intersection(cell)
-
-                if hasattr(clipped, "area") and clipped.area > 0:
-                    division_letter = chr(65 + division_counter)  # A, B, C, etc.
-                    division_name = f"Division {division_letter}"
-                    division_id = f"DIV-{division_letter}"
-
-                    # Calculate priority based on incident location
-                    priority = self._calculate_division_priority(
-                        clipped, self.incident_location, divisions
-                    )
-
-                    divisions.append(
-                        {
-                            "name": division_name,
-                            "division_id": division_id,
-                            "geometry": clipped,
-                            "area_m2": self._calculate_area_m2(clipped),
-                            "status": "unassigned",
-                            "priority": priority,
-                            "search_type": "primary",
-                            "estimated_duration": "2 hours",
-                        }
-                    )
-
-                    division_counter += 1
-
-        return divisions
-
-    def _save_divisions(self, divisions: List[Dict]):
-        """Save divisions to database"""
-        for division in divisions:
-            # Convert geometry to WKT
-            if hasattr(division["geometry"], "exterior"):
-                coords = list(division["geometry"].exterior.coords)
-                coords_str = ", ".join([f"{x} {y}" for x, y in coords])
-                polygon_wkt = f"POLYGON(({coords_str}))"
-
-                query = """
-                INSERT INTO search_divisions 
-                (incident_id, division_name, division_id, area_geometry, 
-                 estimated_area_m2, status, priority, search_type, estimated_duration)
-                VALUES (%s, %s, %s, ST_GeomFromText(%s, 4326), %s, %s, %s, %s, %s)
-                """
-
-                params = (
-                    self.incident_id,
-                    division.get("division_name", division.get("name")),
-                    division.get("division_id"),
-                    polygon_wkt,
-                    division.get("area_m2", division.get("estimated_area_m2", 0)),
-                    division.get("status", "unassigned"),
-                    division.get("priority", "Low"),
-                    division.get("search_type", "primary"),
-                    division.get("estimated_duration", "2 hours"),
-                )
-
-                self.db.execute_query(query, params)
 
     @classmethod
     def get_incident_by_id(
