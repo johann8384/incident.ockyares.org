@@ -20,6 +20,7 @@ db_manager = DatabaseManager()
 def update_unit_status_unified(unit_id):
     """
     Enhanced unified status update endpoint with business logic for:
+    - Automatic unit creation during staging/checkin
     - Automatic status transitions (assigned->operating when % > 0)
     - Division unassignment when going to staging/out of service/quarters
     - Division status updates when units are unassigned
@@ -43,68 +44,97 @@ def update_unit_status_unified(unit_id):
         with db_manager.get_connection() as conn:
             cursor = conn.cursor()
             
-            # Get current unit status and division
+            # Check if unit exists first
             cursor.execute("""
                 SELECT current_status, current_division_id 
                 FROM units 
-                WHERE unit_id = %s AND current_incident_id = %s
-            """, (unit_id, incident_id))
+                WHERE unit_id = %s
+            """, (unit_id,))
             
             current_unit = cursor.fetchone()
-            if not current_unit:
+            
+            # If unit doesn't exist and this is a staging (checkin) operation, create it
+            if not current_unit and new_status == 'staging':
+                # Validate required fields for checkin
+                required_checkin_fields = ['unit_name', 'unit_type', 'unit_leader']
+                missing_fields = [field for field in required_checkin_fields if not data.get(field)]
+                if missing_fields:
+                    return jsonify({
+                        "error": f"Missing required fields for unit checkin: {', '.join(missing_fields)}"
+                    }), 400
+                
+                # Create new unit
+                cursor.execute("""
+                    INSERT INTO units (unit_id, unit_name, unit_type, unit_leader, 
+                                     contact_info, number_of_personnel, bsar_tech,
+                                     current_status, current_incident_id, current_division_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    unit_id, data.get('unit_name'), data.get('unit_type'), 
+                    data.get('unit_leader'), data.get('contact_info'),
+                    data.get('number_of_personnel'), data.get('bsar_tech', False),
+                    new_status, incident_id, division_id
+                ))
+                
+                current_status = None
+                current_division = None
+                logger.info(f"Created new unit {unit_id} during checkin")
+                
+            elif not current_unit:
+                # Unit doesn't exist and this isn't a checkin
                 return jsonify({"error": "Unit not found for this incident"}), 404
+            else:
+                current_status = current_unit[0]
+                current_division = current_unit[1]
+            
+            # Apply business logic for status transitions only if unit already existed
+            if current_unit:
+                # 1. Assigned->Operating automatically when % > 0
+                if current_status == 'assigned' and percentage_complete > 0:
+                    new_status = 'operating'
                 
-            current_status = current_unit[0]
-            current_division = current_unit[1]
-            
-            # Apply business logic for status transitions
-            
-            # 1. Assigned->Operating automatically when % > 0
-            if current_status == 'assigned' and percentage_complete > 0:
-                new_status = 'operating'
-            
-            # 2. Handle division unassignment for certain status changes
-            units_to_unassign_divisions = ['staging', 'out of service', 'quarters']
-            if new_status in units_to_unassign_divisions and current_division:
-                # Unassign division from unit
+                # 2. Handle division unassignment for certain status changes
+                units_to_unassign_divisions = ['staging', 'out of service', 'quarters']
+                if new_status in units_to_unassign_divisions and current_division:
+                    # Unassign division from unit
+                    cursor.execute("""
+                        UPDATE search_divisions 
+                        SET assigned_unit_id = NULL, status = 'unassigned'
+                        WHERE incident_id = %s AND assigned_unit_id = %s
+                    """, (incident_id, unit_id))
+                    
+                    logger.info(f"Unassigned unit {unit_id} from division {current_division}")
+                    division_id = None  # Clear division assignment
+                
+                # 3. Handle "out of service" status - unassign from division
+                if new_status == 'out of service' and current_division:
+                    cursor.execute("""
+                        UPDATE search_divisions 
+                        SET assigned_unit_id = NULL, status = 'unassigned'
+                        WHERE incident_id = %s AND assigned_unit_id = %s
+                    """, (incident_id, unit_id))
+                    
+                    logger.info(f"Unit {unit_id} going out of service - unassigned from division {current_division}")
+                    division_id = None
+                
+                # 4. If recovering->operating, require division selection
+                if current_status == 'recovering' and new_status == 'operating':
+                    if not division_id:
+                        return jsonify({"error": "Division selection required when returning to operating status"}), 400
+                    
+                    # Assign to new division
+                    cursor.execute("""
+                        UPDATE search_divisions 
+                        SET assigned_unit_id = %s, status = 'assigned'
+                        WHERE incident_id = %s AND division_id = %s
+                    """, (unit_id, incident_id, division_id))
+                
+                # Update existing unit status
                 cursor.execute("""
-                    UPDATE search_divisions 
-                    SET assigned_unit_id = NULL, status = 'unassigned'
-                    WHERE incident_id = %s AND assigned_unit_id = %s
-                """, (incident_id, unit_id))
-                
-                logger.info(f"Unassigned unit {unit_id} from division {current_division}")
-                division_id = None  # Clear division assignment
-            
-            # 3. Handle "out of service" status - unassign from division
-            if new_status == 'out of service' and current_division:
-                cursor.execute("""
-                    UPDATE search_divisions 
-                    SET assigned_unit_id = NULL, status = 'unassigned'
-                    WHERE incident_id = %s AND assigned_unit_id = %s
-                """, (incident_id, unit_id))
-                
-                logger.info(f"Unit {unit_id} going out of service - unassigned from division {current_division}")
-                division_id = None
-            
-            # 4. If recovering->operating, require division selection
-            if current_status == 'recovering' and new_status == 'operating':
-                if not division_id:
-                    return jsonify({"error": "Division selection required when returning to operating status"}), 400
-                
-                # Assign to new division
-                cursor.execute("""
-                    UPDATE search_divisions 
-                    SET assigned_unit_id = %s, status = 'assigned'
-                    WHERE incident_id = %s AND division_id = %s
-                """, (unit_id, incident_id, division_id))
-            
-            # Update unit status
-            cursor.execute("""
-                UPDATE units 
-                SET current_status = %s, current_division_id = %s
-                WHERE unit_id = %s AND current_incident_id = %s
-            """, (new_status, division_id, unit_id, incident_id))
+                    UPDATE units 
+                    SET current_status = %s, current_incident_id = %s, current_division_id = %s
+                    WHERE unit_id = %s
+                """, (new_status, incident_id, division_id, unit_id))
             
             # Record status history
             cursor.execute("""
