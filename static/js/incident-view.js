@@ -795,6 +795,9 @@ function displayDivisions(divisions) {
         const percentage = division.percentage_complete || 0;
         const lastUpdate = division.last_update ? new Date(division.last_update).toLocaleString() : null;
         
+        // Check if division is assigned to hide dropdowns
+        const isAssigned = division.assigned_unit_id;
+        
         return `
             <div class="col-md-6 col-lg-4">
                 <div class="card h-100 ${borderClass}">
@@ -826,27 +829,31 @@ function displayDivisions(divisions) {
                             </div>
                         ` : ''}
                         
-                        <!-- Unit Assignment -->
-                        <div class="mb-3">
-                            <label class="form-label small">Assigned Unit:</label>
-                            <select class="form-select form-select-sm" 
-                                    id="unit-select-${division.division_id}" 
-                                    onchange="assignUnitToDivision('${division.division_id}', this.value)">
-                                <option value="">Select Unit...</option>
-                            </select>
-                        </div>
+                        <!-- Unit Assignment - Hidden when assigned -->
+                        ${!isAssigned ? `
+                            <div class="mb-3">
+                                <label class="form-label small">Assigned Unit:</label>
+                                <select class="form-select form-select-sm" 
+                                        id="unit-select-${division.division_id}" 
+                                        onchange="assignUnitToDivision('${division.division_id}', this.value)">
+                                    <option value="">Select Unit...</option>
+                                </select>
+                            </div>
+                        ` : ''}
                         
-                        <!-- Priority Selection -->
-                        <div class="mb-3">
-                            <label class="form-label small">Priority:</label>
-                            <select class="form-select form-select-sm" 
-                                    id="priority-select-${division.division_id}"
-                                    onchange="updateDivisionPriority('${division.division_id}', this.value)">
-                                <option value="High" ${division.priority === 'High' ? 'selected' : ''}>High</option>
-                                <option value="Medium" ${division.priority === 'Medium' ? 'selected' : ''}>Medium</option>
-                                <option value="Low" ${division.priority === 'Low' ? 'selected' : ''}>Low</option>
-                            </select>
-                        </div>
+                        <!-- Priority Selection - Hidden when assigned -->
+                        ${!isAssigned ? `
+                            <div class="mb-3">
+                                <label class="form-label small">Priority:</label>
+                                <select class="form-select form-select-sm" 
+                                        id="priority-select-${division.division_id}"
+                                        onchange="updateDivisionPriority('${division.division_id}', this.value)">
+                                    <option value="High" ${division.priority === 'High' ? 'selected' : ''}>High</option>
+                                    <option value="Medium" ${division.priority === 'Medium' ? 'selected' : ''}>Medium</option>
+                                    <option value="Low" ${division.priority === 'Low' ? 'selected' : ''}>Low</option>
+                                </select>
+                            </div>
+                        ` : ''}
                         
                         <div class="small">
                             <div><strong>Team:</strong> ${division.assigned_team || '<em>Not assigned</em>'}</div>
@@ -861,7 +868,7 @@ function displayDivisions(divisions) {
         `;
     }).join('');
     
-    // Load available units for dropdowns
+    // Load available units for dropdowns (only for unassigned divisions)
     loadAvailableUnits();
 }
 
