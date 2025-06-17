@@ -7,7 +7,6 @@ from collections import deque
 import requests
 from shapely.geometry import Point, Polygon, LineString, MultiPolygon
 from shapely.ops import unary_union
-import networkx as nx
 
 try:
     from scipy.spatial import Voronoi
@@ -30,8 +29,8 @@ class DivisionManager:
         # Target searchable area per division (default ~5000 sq meters)
         self.TARGET_STRUCTURE_AREA_M2 = int(os.getenv("TARGET_STRUCTURE_AREA_M2", 5000))
         
-        # Maximum walking distance from incident to include in first division
-        self.MAX_WALKING_DISTANCE_DEGREES = 0.005  # ~500m
+        # Maximum walking distance for expansion
+        self.MAX_WALKING_DISTANCE_DEGREES = 0.008  # ~800m per expansion step
         
         # Buffer distance for buildings near roads
         self.ROAD_BUILDING_BUFFER_DEGREES = 0.001  # ~100m
@@ -130,22 +129,19 @@ class DivisionManager:
             print(f"Buildings: {len(buildings)}, Roads: {len(roads)}")
             print(f"Target area per division: {self.TARGET_STRUCTURE_AREA_M2:,} sq meters")
             
-            # Step 1: Build road network graph
-            road_graph = self._build_road_network(roads, polygon)
-            
-            # Step 2: Map buildings to nearby road segments
+            # Step 1: Map buildings to nearby road segments
             building_road_map = self._map_buildings_to_roads(buildings, roads)
             
-            # Step 3: Expand divisions from incident location
-            divisions_data = self._expand_divisions_from_incident(
-                incident_location, road_graph, building_road_map, polygon
+            # Step 2: Expand divisions from incident location using simple distance-based expansion
+            divisions_data = self._expand_divisions_walkable(
+                incident_location, buildings, roads, polygon
             )
             
             if not divisions_data:
                 print("No walkable divisions created")
                 return []
 
-            # Step 4: Convert to division format
+            # Step 3: Convert to division format
             divisions = []
             for i, division_data in enumerate(divisions_data):
                 try:
@@ -169,7 +165,13 @@ class DivisionManager:
                         total_structures = len(division_data['buildings'])
                         total_searchable_area = sum(b['searchable_area_m2'] for b in division_data['buildings'])
                         building_types = self._summarize_building_types(division_data['buildings'])
-                        road_names = self._get_road_names(division_data['road_segments'])
+                        
+                        # Calculate walking distance from incident
+                        avg_distance = sum(
+                            incident_location.distance(b['centroid']) for b in division_data['buildings']
+                        ) / len(division_data['buildings']) if division_data['buildings'] else 0
+                        
+                        walking_distance_m = avg_distance * 111000  # Rough conversion to meters
 
                         divisions.append({
                             "division_name": division_name,
@@ -179,7 +181,7 @@ class DivisionManager:
                             "structure_count": total_structures,
                             "searchable_area_m2": total_searchable_area,
                             "building_types": building_types,
-                            "road_access": road_names,
+                            "avg_walking_distance_m": int(walking_distance_m),
                             "walkable_from_incident": True,
                             "status": "unassigned",
                             "priority": priority,
@@ -206,11 +208,9 @@ class DivisionManager:
         try:
             print(f"Creating walkable divisions from incident location")
             
-            # Build road network and expand
-            road_graph = self._build_road_network(roads, search_area)
-            building_road_map = self._map_buildings_to_roads(buildings, roads)
-            divisions_data = self._expand_divisions_from_incident(
-                incident_location, road_graph, building_road_map, search_area
+            # Expand divisions walkably
+            divisions_data = self._expand_divisions_walkable(
+                incident_location, buildings, roads, search_area
             )
             
             if not divisions_data:
@@ -260,63 +260,6 @@ class DivisionManager:
             print(f"Walkable division creation failed: {e}")
             return []
 
-    def _build_road_network(self, roads: List[LineString], polygon: Polygon) -> nx.Graph:
-        """Build a NetworkX graph from road segments for pathfinding"""
-        try:
-            G = nx.Graph()
-            
-            # Add nodes for road intersections and endpoints
-            node_id = 0
-            coord_to_node = {}
-            tolerance = 0.0001  # ~10m tolerance for intersection detection
-            
-            for road in roads:
-                # Clip road to search area
-                clipped_road = polygon.intersection(road)
-                
-                road_lines = []
-                if isinstance(clipped_road, LineString):
-                    road_lines = [clipped_road]
-                elif hasattr(clipped_road, 'geoms'):
-                    road_lines = [geom for geom in clipped_road.geoms 
-                                if isinstance(geom, LineString)]
-                
-                for line in road_lines:
-                    coords = list(line.coords)
-                    
-                    # Add nodes for start and end points
-                    for coord in [coords[0], coords[-1]]:
-                        # Find existing node within tolerance
-                        existing_node = None
-                        for existing_coord, existing_id in coord_to_node.items():
-                            if (abs(existing_coord[0] - coord[0]) < tolerance and 
-                                abs(existing_coord[1] - coord[1]) < tolerance):
-                                existing_node = existing_id
-                                break
-                        
-                        if existing_node is None:
-                            coord_to_node[coord] = node_id
-                            G.add_node(node_id, pos=coord, point=Point(coord))
-                            node_id += 1
-                    
-                    # Add edge between start and end nodes
-                    start_node = coord_to_node[coords[0]]
-                    end_node = coord_to_node[coords[-1]]
-                    
-                    if start_node != end_node:
-                        distance = line.length
-                        G.add_edge(start_node, end_node, 
-                                  weight=distance, 
-                                  geometry=line,
-                                  road_segment=line)
-            
-            print(f"Built road network: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
-            return G
-            
-        except Exception as e:
-            print(f"Error building road network: {e}")
-            return nx.Graph()
-
     def _map_buildings_to_roads(self, buildings: List[Dict], roads: List[LineString]) -> Dict:
         """Map each building to its nearest road segment"""
         try:
@@ -347,214 +290,136 @@ class DivisionManager:
             print(f"Error mapping buildings to roads: {e}")
             return {}
 
-    def _expand_divisions_from_incident(
-        self, incident_location: Point, road_graph: nx.Graph, 
-        building_road_map: Dict, polygon: Polygon
-    ) -> List[Dict]:
-        """Expand divisions from incident location using breadth-first search on road network"""
-        try:
-            if not road_graph.nodes():
-                return []
-            
-            # Find closest road network node to incident
-            min_distance = float('inf')
-            start_node = None
-            
-            for node_id, data in road_graph.nodes(data=True):
-                distance = data['point'].distance(incident_location)
-                if distance < min_distance:
-                    min_distance = distance
-                    start_node = node_id
-            
-            if start_node is None:
-                print("No road network node found near incident")
-                return []
-            
-            print(f"Starting expansion from node {start_node} (distance: {min_distance:.6f} degrees)")
-            
-            divisions = []
-            visited_nodes = set()
-            visited_buildings = set()
-            
-            # Breadth-first expansion from incident location
-            queue = deque([start_node])
-            current_division = {
-                'buildings': [],
-                'road_segments': [],
-                'nodes': set(),
-                'total_area': 0
-            }
-            
-            while queue and len(divisions) < 20:  # Safety limit
-                
-                # Expand current division until target area reached
-                while queue and current_division['total_area'] < self.TARGET_STRUCTURE_AREA_M2:
-                    node = queue.popleft()
-                    
-                    if node in visited_nodes:
-                        continue
-                    
-                    visited_nodes.add(node)
-                    current_division['nodes'].add(node)
-                    
-                    # Add buildings from road segments connected to this node
-                    for neighbor in road_graph.neighbors(node):
-                        if neighbor not in visited_nodes:
-                            # Get road segment between node and neighbor
-                            edge_data = road_graph.get_edge_data(node, neighbor)
-                            if edge_data and 'road_segment' in edge_data:
-                                road_segment = edge_data['road_segment']
-                                current_division['road_segments'].append(road_segment)
-                                
-                                # Find buildings on this road segment
-                                for road_idx, building_indices in building_road_map.items():
-                                    # Check if any building on this road segment
-                                    for building_idx in building_indices:
-                                        if building_idx not in visited_buildings:
-                                            # Add building to current division
-                                            visited_buildings.add(building_idx)
-                                            # Note: We need access to the buildings list here
-                                            # This is a limitation - we need to pass buildings list
-                    
-                    # Add unvisited neighbors to queue for expansion
-                    for neighbor in road_graph.neighbors(node):
-                        if neighbor not in visited_nodes:
-                            queue.append(neighbor)
-                
-                # If current division has buildings, save it and start new one
-                if current_division['buildings'] or current_division['road_segments']:
-                    if current_division['total_area'] > 0:  # Only save if has buildings
-                        divisions.append(current_division.copy())
-                    
-                    # Start new division
-                    current_division = {
-                        'buildings': [],
-                        'road_segments': [],
-                        'nodes': set(),
-                        'total_area': 0
-                    }
-                
-                # If no more nodes to explore, we're done
-                if not queue:
-                    break
-            
-            # Add final division if it has content
-            if current_division['buildings'] or current_division['road_segments']:
-                if current_division['total_area'] > 0:
-                    divisions.append(current_division)
-            
-            print(f"Expansion created {len(divisions)} divisions")
-            return divisions
-            
-        except Exception as e:
-            print(f"Error in division expansion: {e}")
-            return []
-
     def _expand_divisions_walkable(
         self, incident_location: Point, buildings: List[Dict], 
         roads: List[LineString], polygon: Polygon
     ) -> List[Dict]:
-        """Simplified walkable expansion algorithm"""
+        """Expand divisions walkably from incident location using distance-based growth"""
         try:
             divisions = []
             visited_buildings = set()
             
             # Start from incident location
-            current_position = incident_location
+            current_center = incident_location
             division_counter = 0
             
-            while len(visited_buildings) < len(buildings) and division_counter < 20:
+            print(f"Starting walkable expansion from incident location")
+            
+            while len(visited_buildings) < len(buildings) and division_counter < 25:
                 current_division = {
                     'buildings': [],
                     'road_segments': [],
-                    'total_area': 0
+                    'total_area': 0,
+                    'center': current_center
                 }
                 
-                # Find nearest unvisited building within walking distance
-                expansion_radius = self.MAX_WALKING_DISTANCE_DEGREES
+                print(f"Division {division_counter + 1}: Starting from center")
                 
-                while current_division['total_area'] < self.TARGET_STRUCTURE_AREA_M2:
-                    nearest_buildings = []
+                # Expand in rings until we hit target area
+                expansion_radius = 0.002  # Start with ~200m radius
+                max_radius = 0.015  # Max ~1.5km radius
+                
+                while (current_division['total_area'] < self.TARGET_STRUCTURE_AREA_M2 and 
+                       expansion_radius <= max_radius):
                     
-                    # Find buildings within current expansion radius
+                    # Find buildings within current radius
+                    buildings_in_radius = []
                     for i, building in enumerate(buildings):
                         if i in visited_buildings:
                             continue
                             
-                        distance = current_position.distance(building['centroid'])
+                        distance = current_center.distance(building['centroid'])
                         if distance <= expansion_radius:
-                            nearest_buildings.append((i, building, distance))
+                            # Check if building is road-accessible (simplified)
+                            if self._is_road_accessible_simple(current_center, building['centroid'], roads):
+                                buildings_in_radius.append((i, building, distance))
                     
-                    if not nearest_buildings:
-                        # Expand search radius or break
-                        expansion_radius *= 1.5
-                        if expansion_radius > 0.02:  # ~2km max
-                            break
-                        continue
+                    # Add buildings from closest to furthest
+                    buildings_in_radius.sort(key=lambda x: x[2])
                     
-                    # Sort by distance and add closest buildings
-                    nearest_buildings.sort(key=lambda x: x[2])
-                    
-                    for building_idx, building, distance in nearest_buildings:
+                    added_any = False
+                    for building_idx, building, distance in buildings_in_radius:
                         if current_division['total_area'] >= self.TARGET_STRUCTURE_AREA_M2:
                             break
                             
-                        # Check if building is road-accessible from current position
-                        if self._is_road_accessible(current_position, building['centroid'], roads):
-                            current_division['buildings'].append(building)
-                            current_division['total_area'] += building['searchable_area_m2']
-                            visited_buildings.add(building_idx)
-                            
-                            # Update current position for next expansion
-                            current_position = building['centroid']
+                        current_division['buildings'].append(building)
+                        current_division['total_area'] += building['searchable_area_m2']
+                        visited_buildings.add(building_idx)
+                        added_any = True
                     
-                    break  # Exit inner while loop
+                    if not added_any:
+                        # Expand radius if no buildings found
+                        expansion_radius *= 1.3
+                    else:
+                        # Found buildings, try slightly larger radius for more
+                        expansion_radius *= 1.1
                 
+                # If we have buildings, save this division
                 if current_division['buildings']:
                     divisions.append(current_division)
-                
-                division_counter += 1
-                
-                # Find next starting position (furthest unvisited building)
-                if len(visited_buildings) < len(buildings):
-                    max_distance = 0
-                    next_position = current_position
+                    print(f"  Division {division_counter + 1}: {len(current_division['buildings'])} buildings, "
+                          f"{current_division['total_area']:,.0f} sq m")
                     
+                    # Update center for next division (furthest building from incident)
+                    if len(visited_buildings) < len(buildings):
+                        max_distance = 0
+                        next_center = current_center
+                        
+                        for i, building in enumerate(buildings):
+                            if i not in visited_buildings:
+                                distance = incident_location.distance(building['centroid'])
+                                if distance > max_distance:
+                                    max_distance = distance
+                                    next_center = building['centroid']
+                        
+                        current_center = next_center
+                else:
+                    # No more buildings found, try to grab any remaining
+                    remaining_buildings = []
                     for i, building in enumerate(buildings):
                         if i not in visited_buildings:
-                            distance = current_position.distance(building['centroid'])
-                            if distance > max_distance:
-                                max_distance = distance
-                                next_position = building['centroid']
+                            remaining_buildings.append(building)
+                            visited_buildings.add(i)
                     
-                    current_position = next_position
+                    if remaining_buildings:
+                        current_division['buildings'] = remaining_buildings
+                        current_division['total_area'] = sum(b['searchable_area_m2'] for b in remaining_buildings)
+                        divisions.append(current_division)
+                        print(f"  Division {division_counter + 1}: {len(remaining_buildings)} remaining buildings")
+                    
+                    break  # No more buildings
+                
+                division_counter += 1
             
-            print(f"Walkable expansion created {len(divisions)} divisions")
+            print(f"Walkable expansion created {len(divisions)} divisions, "
+                  f"covered {len(visited_buildings)}/{len(buildings)} buildings")
             return divisions
             
         except Exception as e:
             print(f"Error in walkable expansion: {e}")
             return []
 
-    def _is_road_accessible(self, start: Point, end: Point, roads: List[LineString]) -> bool:
-        """Check if two points are connected by roads (simplified)"""
+    def _is_road_accessible_simple(self, start: Point, end: Point, roads: List[LineString]) -> bool:
+        """Simple check if two points are road-accessible (within reasonable distance)"""
         try:
-            # Simple check: is there a road path within reasonable distance
-            max_detour = start.distance(end) * 2.0  # Allow 100% detour
+            direct_distance = start.distance(end)
             
-            # Find roads near start and end points
-            start_roads = []
-            end_roads = []
+            # If very close, assume accessible
+            if direct_distance <= 0.002:  # ~200m
+                return True
             
+            # Check if there are roads connecting the general area
+            midpoint = Point((start.x + end.x) / 2, (start.y + end.y) / 2)
+            search_radius = direct_distance * 0.7  # 70% of direct distance
+            
+            # Count roads near the path
+            roads_near_path = 0
             for road in roads:
-                if road.distance(start) <= self.ROAD_BUILDING_BUFFER_DEGREES:
-                    start_roads.append(road)
-                if road.distance(end) <= self.ROAD_BUILDING_BUFFER_DEGREES:
-                    end_roads.append(road)
+                if road.distance(midpoint) <= search_radius:
+                    roads_near_path += 1
             
-            # If both points have nearby roads, assume accessible
-            # (This is simplified - a proper implementation would use network analysis)
-            return len(start_roads) > 0 and len(end_roads) > 0
+            # If we have roads in the area, assume accessible
+            return roads_near_path > 0
             
         except Exception as e:
             print(f"Error checking road accessibility: {e}")
@@ -570,17 +435,9 @@ class DivisionManager:
             building_geometries = [b['geometry'] for b in division_data['buildings']]
             buildings_union = unary_union(building_geometries)
             
-            # Add road segments to the area
-            road_geometries = division_data.get('road_segments', [])
-            if road_geometries:
-                roads_union = unary_union(road_geometries)
-                roads_buffered = roads_union.buffer(self.ROAD_BUILDING_BUFFER_DEGREES)
-                division_area = unary_union([buildings_union, roads_buffered])
-            else:
-                division_area = buildings_union
-            
-            # Buffer the combined area
-            division_area = division_area.buffer(self.ROAD_BUILDING_BUFFER_DEGREES)
+            # Buffer the area to include walking paths
+            walking_buffer = self.ROAD_BUILDING_BUFFER_DEGREES * 2  # Larger buffer for walking area
+            division_area = buildings_union.buffer(walking_buffer)
             
             # Clip to search area
             clipped = polygon.intersection(division_area)
@@ -596,17 +453,6 @@ class DivisionManager:
         except Exception as e:
             print(f"Error creating walkable division polygon: {e}")
             return None
-
-    def _get_road_names(self, road_segments: List[LineString]) -> str:
-        """Get summary of road names for a division"""
-        # This would need road name data from OSM
-        # For now, return generic description
-        if len(road_segments) == 0:
-            return "No roads"
-        elif len(road_segments) == 1:
-            return "Single road access"
-        else:
-            return f"{len(road_segments)} connected roads"
 
     def _fetch_building_data(self, polygon: Polygon) -> List[Dict]:
         """Fetch building data from Overpass API (reused from previous implementation)"""
