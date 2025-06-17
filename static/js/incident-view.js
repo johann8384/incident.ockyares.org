@@ -36,6 +36,27 @@ function getProgressBarClass(percentage) {
     return 'bg-danger';
 }
 
+// Toggle edit mode for division
+function toggleDivisionEdit(divisionId) {
+    const editControls = document.getElementById(`edit-controls-${divisionId}`);
+    const editButton = document.getElementById(`edit-btn-${divisionId}`);
+    const isHidden = editControls.style.display === 'none' || editControls.style.display === '';
+    
+    if (isHidden) {
+        editControls.style.display = 'block';
+        editButton.innerHTML = '<i class="bi bi-x-circle"></i>';
+        editButton.title = 'Cancel Edit';
+        editButton.classList.remove('btn-outline-secondary');
+        editButton.classList.add('btn-outline-danger');
+    } else {
+        editControls.style.display = 'none';
+        editButton.innerHTML = '<i class="bi bi-pencil"></i>';
+        editButton.title = 'Edit Assignment';
+        editButton.classList.remove('btn-outline-danger');
+        editButton.classList.add('btn-outline-secondary');
+    }
+}
+
 // Initialize map
 function initMap() {
     map = L.map('map').setView([38.3960874, -85.4425145], 13); // Default to Louisville, KY
@@ -795,7 +816,7 @@ function displayDivisions(divisions) {
         const percentage = division.percentage_complete || 0;
         const lastUpdate = division.last_update ? new Date(division.last_update).toLocaleString() : null;
         
-        // Check if division is assigned to hide dropdowns
+        // Check if division is assigned to show edit button
         const isAssigned = division.assigned_unit_id;
         
         return `
@@ -807,7 +828,17 @@ function displayDivisions(divisions) {
                                 <h6 class="card-title mb-0">${division.division_name || division.name}</h6>
                                 <small class="text-muted">${division.division_id}</small>
                             </div>
-                            <span class="badge bg-${priorityClass}">${division.priority || 'Low'}</span>
+                            <div class="d-flex align-items-center gap-2">
+                                <span class="badge bg-${priorityClass}">${division.priority || 'Low'}</span>
+                                ${isAssigned ? `
+                                    <button class="btn btn-sm btn-outline-secondary" 
+                                            id="edit-btn-${division.division_id}"
+                                            onclick="toggleDivisionEdit('${division.division_id}')" 
+                                            title="Edit Assignment">
+                                        <i class="bi bi-pencil"></i>
+                                    </button>
+                                ` : ''}
+                            </div>
                         </div>
                     </div>
                     <div class="card-body">
@@ -829,8 +860,9 @@ function displayDivisions(divisions) {
                             </div>
                         ` : ''}
                         
-                        <!-- Unit Assignment - Hidden when assigned -->
-                        ${!isAssigned ? `
+                        <!-- Assignment Controls - Always shown for unassigned, hidden by default for assigned -->
+                        <div id="edit-controls-${division.division_id}" style="display: ${isAssigned ? 'none' : 'block'};">
+                            <!-- Unit Assignment -->
                             <div class="mb-3">
                                 <label class="form-label small">Assigned Unit:</label>
                                 <select class="form-select form-select-sm" 
@@ -839,10 +871,8 @@ function displayDivisions(divisions) {
                                     <option value="">Select Unit...</option>
                                 </select>
                             </div>
-                        ` : ''}
-                        
-                        <!-- Priority Selection - Hidden when assigned -->
-                        ${!isAssigned ? `
+                            
+                            <!-- Priority Selection -->
                             <div class="mb-3">
                                 <label class="form-label small">Priority:</label>
                                 <select class="form-select form-select-sm" 
@@ -853,7 +883,7 @@ function displayDivisions(divisions) {
                                     <option value="Low" ${division.priority === 'Low' ? 'selected' : ''}>Low</option>
                                 </select>
                             </div>
-                        ` : ''}
+                        </div>
                         
                         <div class="small">
                             <div><strong>Team:</strong> ${division.assigned_team || '<em>Not assigned</em>'}</div>
@@ -868,7 +898,7 @@ function displayDivisions(divisions) {
         `;
     }).join('');
     
-    // Load available units for dropdowns (only for unassigned divisions)
+    // Load available units for dropdowns
     loadAvailableUnits();
 }
 
