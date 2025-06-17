@@ -362,7 +362,7 @@ class Incident:
             return {}
 
     def get_divisions(self) -> List[Dict]:
-        """Get search divisions for this incident with current progress"""
+        """Get search divisions for this incident with current progress, ordered alphabetically"""
         try:
             query = """
             SELECT 
@@ -385,7 +385,7 @@ class Incident:
                 LIMIT 1
             ) ush ON true
             WHERE sd.incident_id = %s
-            ORDER BY sd.priority DESC, sd.division_name
+            ORDER BY sd.division_name
             """
 
             result = self.db.execute_query(query, (self.incident_id,), fetch=True)
