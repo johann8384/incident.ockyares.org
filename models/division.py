@@ -1,4 +1,5 @@
 import hashlib
+import os
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 
@@ -22,8 +23,10 @@ class DivisionManager:
     def __init__(self, db_manager: DatabaseManager = None):
         self.db = db_manager or DatabaseManager()
         self._road_cache = {}
-        # Distance for road segments (4000 feet = ~1219 meters)
-        self.ROAD_SEGMENT_DISTANCE_DEGREES = 0.013  # ~1219 meters / 4000 feet
+        # Configurable road segment distance (default 8000 feet = ~2438 meters)
+        # Converting to degrees: approximately 0.022 degrees per 2438 meters
+        road_segment_feet = int(os.getenv("ROAD_SEGMENT_DISTANCE_FEET", 8000))
+        self.ROAD_SEGMENT_DISTANCE_DEGREES = (road_segment_feet / 1000) * 0.009  # ~0.022 for 8000ft
 
     def generate_divisions_preview(
         self, 
@@ -113,9 +116,10 @@ class DivisionManager:
             if not roads:
                 return []
 
-            print(f"Creating road-centric divisions with {len(roads)} roads")
+            road_segment_feet = int(os.getenv("ROAD_SEGMENT_DISTANCE_FEET", 8000))
+            print(f"Creating road-centric divisions with {len(roads)} roads (segments: {road_segment_feet}ft)")
             
-            # Step 1: Segment roads into 4000-foot chunks
+            # Step 1: Segment roads into configurable-foot chunks
             road_segments = self._segment_roads_into_chunks(roads, polygon)
             
             if not road_segments:
@@ -178,7 +182,8 @@ class DivisionManager:
             if not roads:
                 return []
 
-            print(f"Creating road-centric divisions with {len(roads)} roads")
+            road_segment_feet = int(os.getenv("ROAD_SEGMENT_DISTANCE_FEET", 8000))
+            print(f"Creating road-centric divisions with {len(roads)} roads (segments: {road_segment_feet}ft)")
             
             # Segment roads into chunks
             road_segments = self._segment_roads_into_chunks(roads, search_area)
@@ -227,7 +232,7 @@ class DivisionManager:
             return []
 
     def _segment_roads_into_chunks(self, roads: List[LineString], polygon: Polygon) -> List[LineString]:
-        """Segment roads into 4000-foot chunks within the search area"""
+        """Segment roads into configurable-foot chunks within the search area"""
         try:
             road_segments = []
             
@@ -253,7 +258,8 @@ class DivisionManager:
                     print(f"Error processing road {road_idx}: {e}")
                     continue
             
-            print(f"Segmented roads into {len(road_segments)} chunks")
+            road_segment_feet = int(os.getenv("ROAD_SEGMENT_DISTANCE_FEET", 8000))
+            print(f"Segmented roads into {len(road_segments)} chunks of {road_segment_feet}ft each")
             return road_segments
             
         except Exception as e:
@@ -261,7 +267,7 @@ class DivisionManager:
             return []
 
     def _segment_line_into_chunks(self, line: LineString) -> List[LineString]:
-        """Segment a single road line into 4000-foot chunks"""
+        """Segment a single road line into configurable-foot chunks"""
         try:
             segments = []
             total_length = line.length
