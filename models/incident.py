@@ -1,3 +1,8 @@
+"""
+Incident Model - Unified status tracking system
+All unit interactions are status updates, including initial check-in
+"""
+
 import json
 import os
 import uuid
@@ -357,17 +362,30 @@ class Incident:
             return {}
 
     def get_divisions(self) -> List[Dict]:
-        """Get search divisions for this incident"""
+        """Get search divisions for this incident with current progress"""
         try:
             query = """
             SELECT 
-                id, division_name, division_id, estimated_area_m2,
-                assigned_team, team_leader, priority, search_type,
-                estimated_duration, status, assigned_unit_id,
-                ST_AsGeoJSON(area_geometry) as geometry_geojson
-            FROM search_divisions
-            WHERE incident_id = %s
-            ORDER BY priority DESC, division_name
+                sd.id, sd.division_name, sd.division_id, sd.estimated_area_m2,
+                sd.assigned_team, sd.team_leader, sd.priority, sd.search_type,
+                sd.estimated_duration, sd.status, sd.assigned_unit_id,
+                ST_AsGeoJSON(sd.area_geometry) as geometry_geojson,
+                u.unit_name, u.unit_type, u.unit_leader,
+                COALESCE(ush.percentage_complete, 0) as percentage_complete,
+                ush.timestamp as last_update
+            FROM search_divisions sd
+            LEFT JOIN units u ON sd.assigned_unit_id = u.unit_id
+            LEFT JOIN LATERAL (
+                SELECT percentage_complete, timestamp
+                FROM unit_status_history
+                WHERE unit_id = sd.assigned_unit_id 
+                  AND incident_id = sd.incident_id
+                  AND division_id = sd.division_id
+                ORDER BY timestamp DESC
+                LIMIT 1
+            ) ush ON true
+            WHERE sd.incident_id = %s
+            ORDER BY sd.priority DESC, sd.division_name
             """
 
             result = self.db.execute_query(query, (self.incident_id,), fetch=True)
