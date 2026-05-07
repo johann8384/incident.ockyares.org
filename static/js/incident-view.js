@@ -641,6 +641,8 @@ async function loadDivisions() {
             console.log('Divisions loaded:', divisionsData.length, 'divisions'); // Debug
             displayDivisions(data.divisions);
             displayDivisionsOnMap(data.divisions);
+            // Populate unit dropdowns after divisions are displayed
+            await populateUnitSelects();
         } else {
             console.log('No divisions found'); // Debug
             document.getElementById('divisionsSummary').innerHTML = '<div class="text-muted">No search divisions created yet.</div>';
@@ -649,6 +651,42 @@ async function loadDivisions() {
     } catch (error) {
         console.error('Error loading divisions:', error);
         document.getElementById('divisionsSummary').innerHTML = '<div class="text-muted">Error loading divisions data.</div>';
+    }
+}
+
+// Populate unit select dropdowns with available units
+async function populateUnitSelects() {
+    try {
+        const response = await fetch(`/api/incident/${incidentId}/available-units`);
+        const data = await response.json();
+
+        if (data.success && data.units) {
+            // Find all unit select dropdowns
+            const unitSelects = document.querySelectorAll('[id^="unit-select-"]');
+
+            unitSelects.forEach(select => {
+                const currentUnit = select.dataset.currentUnit;
+
+                // Clear existing options except the first one (Unassign)
+                select.innerHTML = '<option value="">-- Unassign --</option>';
+
+                // Add all available units
+                data.units.forEach(unit => {
+                    const option = document.createElement('option');
+                    option.value = unit.unit_id;
+                    option.textContent = `${unit.unit_id}${unit.unit_name ? ' - ' + unit.unit_name : ''}`;
+
+                    // Select the current unit if it matches
+                    if (currentUnit && unit.unit_id === currentUnit) {
+                        option.selected = true;
+                    }
+
+                    select.appendChild(option);
+                });
+            });
+        }
+    } catch (error) {
+        console.error('Error loading available units:', error);
     }
 }
 
@@ -865,10 +903,11 @@ function displayDivisions(divisions) {
                             <!-- Unit Assignment -->
                             <div class="mb-3">
                                 <label class="form-label small">Assigned Unit:</label>
-                                <select class="form-select form-select-sm" 
-                                        id="unit-select-${division.division_id}" 
+                                <select class="form-select form-select-sm"
+                                        id="unit-select-${division.division_id}"
+                                        data-current-unit="${division.assigned_unit_id || ''}"
                                         onchange="assignUnitToDivision('${division.division_id}', this.value)">
-                                    <option value="">Select Unit...</option>
+                                    <option value="">-- Unassign --</option>
                                 </select>
                             </div>
                             
@@ -937,8 +976,6 @@ async function loadAvailableUnits() {
 
 // Assign unit to division
 async function assignUnitToDivision(divisionId, unitId) {
-    if (!unitId) return;
-    
     try {
         const response = await fetch(`/api/incident/${incidentId}/division/${divisionId}/assign-unit`, {
             method: 'POST',
@@ -946,19 +983,23 @@ async function assignUnitToDivision(divisionId, unitId) {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                unit_id: unitId
+                unit_id: unitId || '' // Send empty string for unassignment
             })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.success) {
-            showStatus(`Unit ${unitId} assigned to division ${divisionId}`, 'success');
+            if (unitId) {
+                showStatus(`Unit ${unitId} assigned to division ${divisionId}`, 'success');
+            } else {
+                showStatus(`Division ${divisionId} unassigned`, 'success');
+            }
             // Reload divisions to reflect changes
             loadDivisions();
             loadUnits(); // Refresh units list
         } else {
-            showStatus(`Error assigning unit: ${data.error}`, 'error');
+            showStatus(`Error: ${data.error}`, 'error');
         }
     } catch (error) {
         console.error('Error assigning unit to division:', error);

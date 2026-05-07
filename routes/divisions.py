@@ -86,43 +86,99 @@ def assign_division_to_unit(incident_id):
 @divisions_bp.route("/incident/<incident_id>/division/<division_id>/assign-unit", methods=["POST"])
 @log_request_data
 def assign_unit_to_division(incident_id, division_id):
-    """Assign a unit to a division"""
+    """Assign or un-assign a unit to/from a division"""
     data = request.get_json()
-    
+
     unit_id = data.get('unit_id')
-    if not unit_id:
-        return jsonify({"error": "unit_id is required"}), 400
-    
+
     try:
         with db_manager.get_connection() as conn:
             cursor = conn.cursor()
-            
-            # Update the search_divisions table with unit assignment and status change
-            cursor.execute("""
-                UPDATE search_divisions 
-                SET assigned_unit_id = %s, status = 'assigned'
-                WHERE incident_id = %s AND division_id = %s
-            """, (unit_id, incident_id, division_id))
-            
-            if cursor.rowcount == 0:
-                return jsonify({"error": "Division not found"}), 404
-            
-            # Update unit status to assigned
-            cursor.execute("""
-                UPDATE units 
-                SET current_status = 'assigned',
-                    current_division_id = %s
-                WHERE unit_id = %s AND current_incident_id = %s
-            """, (division_id, unit_id, incident_id))
-            
-            conn.commit()
-            
-            logger.info(f"Assigned unit {unit_id} to division {division_id} in incident {incident_id}")
-            return jsonify({
-                "success": True,
-                "message": f"Unit {unit_id} assigned to division {division_id}"
-            })
-            
+
+            if not unit_id:
+                # Un-assign: empty unit_id means remove assignment
+                # First, get the currently assigned unit to update its status
+                cursor.execute("""
+                    SELECT assigned_unit_id FROM search_divisions
+                    WHERE incident_id = %s AND division_id = %s
+                """, (incident_id, division_id))
+
+                result = cursor.fetchone()
+                old_unit_id = result[0] if result else None
+
+                # Update the division to unassigned
+                cursor.execute("""
+                    UPDATE search_divisions
+                    SET assigned_unit_id = NULL, status = 'unassigned'
+                    WHERE incident_id = %s AND division_id = %s
+                """, (incident_id, division_id))
+
+                if cursor.rowcount == 0:
+                    return jsonify({"error": "Division not found"}), 404
+
+                # Update the old unit's status back to staging
+                if old_unit_id:
+                    cursor.execute("""
+                        UPDATE units
+                        SET current_status = 'staging',
+                            current_division_id = NULL
+                        WHERE unit_id = %s AND current_incident_id = %s
+                    """, (old_unit_id, incident_id))
+
+                conn.commit()
+
+                logger.info(f"Unassigned unit from division {division_id} in incident {incident_id}")
+                return jsonify({
+                    "success": True,
+                    "message": f"Division {division_id} unassigned"
+                })
+
+            else:
+                # Assign: unit_id provided, assign it to the division
+                # First, check if another unit is assigned and unassign it
+                cursor.execute("""
+                    SELECT assigned_unit_id FROM search_divisions
+                    WHERE incident_id = %s AND division_id = %s
+                """, (incident_id, division_id))
+
+                result = cursor.fetchone()
+                old_unit_id = result[0] if result else None
+
+                # Update the division with new unit assignment
+                cursor.execute("""
+                    UPDATE search_divisions
+                    SET assigned_unit_id = %s, status = 'assigned'
+                    WHERE incident_id = %s AND division_id = %s
+                """, (unit_id, incident_id, division_id))
+
+                if cursor.rowcount == 0:
+                    return jsonify({"error": "Division not found"}), 404
+
+                # Update the old unit's status back to staging if different from new unit
+                if old_unit_id and old_unit_id != unit_id:
+                    cursor.execute("""
+                        UPDATE units
+                        SET current_status = 'staging',
+                            current_division_id = NULL
+                        WHERE unit_id = %s AND current_incident_id = %s
+                    """, (old_unit_id, incident_id))
+
+                # Update new unit status to assigned
+                cursor.execute("""
+                    UPDATE units
+                    SET current_status = 'assigned',
+                        current_division_id = %s
+                    WHERE unit_id = %s AND current_incident_id = %s
+                """, (division_id, unit_id, incident_id))
+
+                conn.commit()
+
+                logger.info(f"Assigned unit {unit_id} to division {division_id} in incident {incident_id}")
+                return jsonify({
+                    "success": True,
+                    "message": f"Unit {unit_id} assigned to division {division_id}"
+                })
+
     except Exception as e:
         logger.error(f"Error assigning unit to division: {str(e)}")
         return jsonify({"error": str(e)}), 500
