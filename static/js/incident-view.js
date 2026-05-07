@@ -8,6 +8,75 @@ let divisionsData = [];
 // Get incident ID from URL path
 const incidentId = window.location.pathname.split('/').pop();
 
+// Simple USNG/MGRS conversion function
+function latLngToUSNG(lat, lng, precision = 5) {
+    // Convert lat/lng to UTM
+    const utmZone = Math.floor((lng + 180) / 6) + 1;
+    const centralMeridian = (utmZone - 1) * 6 - 180 + 3;
+
+    const latRad = lat * Math.PI / 180;
+    const lngRad = lng * Math.PI / 180;
+    const centralMeridianRad = centralMeridian * Math.PI / 180;
+
+    const k0 = 0.9996;
+    const a = 6378137; // WGS84 semi-major axis
+    const e = 0.08181919084262; // WGS84 eccentricity
+    const e2 = e * e;
+
+    const N = a / Math.sqrt(1 - e2 * Math.sin(latRad) * Math.sin(latRad));
+    const T = Math.tan(latRad) * Math.tan(latRad);
+    const C = (e2 / (1 - e2)) * Math.cos(latRad) * Math.cos(latRad);
+    const A = (lngRad - centralMeridianRad) * Math.cos(latRad);
+
+    const M = a * ((1 - e2/4 - 3*e2*e2/64 - 5*e2*e2*e2/256) * latRad
+        - (3*e2/8 + 3*e2*e2/32 + 45*e2*e2*e2/1024) * Math.sin(2*latRad)
+        + (15*e2*e2/256 + 45*e2*e2*e2/1024) * Math.sin(4*latRad)
+        - (35*e2*e2*e2/3072) * Math.sin(6*latRad));
+
+    let easting = k0 * N * (A + (1-T+C)*A*A*A/6
+        + (5-18*T+T*T+72*C-58*(e2/(1-e2)))*A*A*A*A*A/120) + 500000;
+
+    let northing = k0 * (M + N*Math.tan(latRad)*(A*A/2
+        + (5-T+9*C+4*C*C)*A*A*A*A/24
+        + (61-58*T+T*T+600*C-330*(e2/(1-e2)))*A*A*A*A*A*A/720));
+
+    if (lat < 0) {
+        northing += 10000000;
+    }
+
+    // Get grid zone designator (latitude band)
+    const latBands = 'CDEFGHJKLMNPQRSTUVWXX';
+    const latBandIndex = Math.floor((lat + 80) / 8);
+    const latBand = latBands.charAt(Math.min(latBandIndex, latBands.length - 1));
+
+    // Get 100km square identifier
+    const e100k = Math.floor(easting / 100000);
+    const n100k = Math.floor(northing / 100000) % 20;
+
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const set = (utmZone - 1) % 3;
+
+    // Column letters for 100k grid
+    const colLetters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const col = colLetters.charAt((e100k - 1 + set * 8) % 24);
+
+    // Row letters for 100k grid
+    const rowSet = (utmZone - 1) % 2;
+    const rowLetters = 'ABCDEFGHJKLMNPQRSTUV';
+    const row = rowLetters.charAt((n100k + rowSet * 5) % 20);
+
+    // Calculate position within 100km square
+    const eastingRemainder = Math.floor(easting % 100000);
+    const northingRemainder = Math.floor(northing % 100000);
+
+    // Format with requested precision
+    const divisor = Math.pow(10, 5 - precision);
+    const eastingStr = Math.floor(eastingRemainder / divisor).toString().padStart(precision, '0');
+    const northingStr = Math.floor(northingRemainder / divisor).toString().padStart(precision, '0');
+
+    return `${utmZone}${latBand} ${col}${row} ${eastingStr} ${northingStr}`;
+}
+
 // Set up unit checkin URLs once we have the incident ID
 document.addEventListener('DOMContentLoaded', function() {
     const unitCheckinUrl = `/incident/${incidentId}/unit-checkin`;
@@ -84,8 +153,21 @@ function initMap() {
     // Add mouse move event to show coordinates
     map.on('mousemove', function(e) {
         const coords = document.getElementById('mapCoordinates');
+        const usngElement = document.getElementById('mapUSNG');
+
         if (coords) {
             coords.innerHTML = `<i class="bi bi-crosshair me-1"></i>Lat: ${e.latlng.lat.toFixed(6)}, Lng: ${e.latlng.lng.toFixed(6)}`;
+        }
+
+        if (usngElement) {
+            try {
+                // Convert lat/lng to USNG using our custom function
+                const usngCoord = latLngToUSNG(e.latlng.lat, e.latlng.lng, 5);
+                usngElement.innerHTML = `<i class="bi bi-grid-3x3 me-1"></i>USNG: ${usngCoord}`;
+            } catch (error) {
+                console.error('USNG conversion error:', error);
+                usngElement.innerHTML = `<i class="bi bi-grid-3x3 me-1"></i>USNG: --`;
+            }
         }
     });
 
