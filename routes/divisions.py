@@ -34,18 +34,25 @@ def generate_divisions_preview():
     incident = Incident(db_manager)
 
     # Generate divisions without saving
+    # Support both max_divisions and area_size_m2 for backwards compatibility
+    max_divisions = data.get("max_divisions")
+    area_size_m2 = data.get("area_size_m2", 40000)
+    strategy = data.get("strategy", "grid")  # "grid" or "road"
+
     divisions = incident.generate_divisions_preview(
         search_area_coordinates=data["coordinates"],
-        area_size_m2=data.get("area_size_m2", 40000),
+        max_divisions=max_divisions,
+        area_size_m2=area_size_m2,
+        strategy=strategy,
     )
 
-    logger.info(f"Generated {len(divisions)} divisions for preview")
+    logger.info(f"Generated {len(divisions)} {strategy}-based divisions for preview")
     return jsonify(
         {
             "success": True,
             "divisions": divisions,
             "count": len(divisions),
-            "message": f"Generated {len(divisions)} search divisions for preview",
+            "message": f"Generated {len(divisions)} {strategy}-based search divisions",
         }
     )
 

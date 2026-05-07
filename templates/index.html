@@ -81,7 +81,7 @@
                             </div>
                             <div class="card-body">
                                 <!-- Map Controls -->
-                                <div class="d-flex flex-wrap gap-2 mb-3">
+                                <div class="d-flex flex-wrap gap-2 mb-3 align-items-center">
                                     <button class="btn btn-primary" id="setLocationBtn">
                                         <i class="bi bi-geo-alt-fill me-2"></i>Set Incident Location
                                     </button>
@@ -91,6 +91,25 @@
                                     <button class="btn btn-danger" id="clearAreaBtn" disabled>
                                         <i class="bi bi-trash me-2"></i>Clear Search Area
                                     </button>
+                                    <div class="d-flex align-items-center gap-2">
+                                        <label for="divisionStrategy" class="form-label mb-0 small fw-bold">Strategy:</label>
+                                        <select class="form-select form-select-sm" id="divisionStrategy" style="width: 140px;">
+                                            <option value="grid">Grid-Based</option>
+                                            <option value="road">Road-Based</option>
+                                        </select>
+                                    </div>
+                                    <div class="d-flex align-items-center gap-2">
+                                        <label for="maxDivisions" class="form-label mb-0 small fw-bold">Max Divisions:</label>
+                                        <div class="input-group" style="width: 140px;">
+                                            <button class="btn btn-outline-secondary btn-sm" type="button" id="decreaseMaxDivisions">
+                                                <i class="bi bi-dash"></i>
+                                            </button>
+                                            <input type="number" class="form-control form-control-sm text-center" id="maxDivisions" value="8" min="1" max="50">
+                                            <button class="btn btn-outline-secondary btn-sm" type="button" id="increaseMaxDivisions">
+                                                <i class="bi bi-plus"></i>
+                                            </button>
+                                        </div>
+                                    </div>
                                     <button class="btn btn-success" id="generateDivisionsBtn" disabled>
                                         <i class="bi bi-lightning-fill me-2"></i>Generate Divisions
                                     </button>

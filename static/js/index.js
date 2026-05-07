@@ -113,12 +113,13 @@ async function reverseGeocode(lat, lng) {
 }
 
 // Generate divisions preview using API
-async function generateDivisionsPreview(coordinates) {
+async function generateDivisionsPreview(coordinates, maxDivisions, strategy) {
     const data = await apiCall('/api/divisions/generate', {
         method: 'POST',
         body: JSON.stringify({
             coordinates: coordinates.map(coord => [coord.lng, coord.lat]), // Convert to lng,lat
-            area_size_m2: 40000
+            max_divisions: maxDivisions,
+            strategy: strategy || 'grid'
         })
     });
     return data.divisions;
@@ -146,9 +147,14 @@ function startLocationMode() {
 }
 
 // Clear search area and divisions
+// NOTE: This does NOT clear the incident location marker
 function clearSearchAreaAndDivisions() {
+    // Clear only the search area and divisions layers
+    // The incident marker is on the map layer, not in these groups
     searchAreaLayer.clearLayers();
     divisionsGroup.clearLayers();
+
+    // Reset state flags
     hasSearchArea = false;
     hasDivisions = false;
     isDrawMode = false;
@@ -156,20 +162,21 @@ function clearSearchAreaAndDivisions() {
     currentDrawingLine = null;
     searchAreaPolygon = null;
     generatedDivisions = null;
-    
+
     // Reset search area button
     const drawBtn = document.getElementById('drawAreaBtn');
     drawBtn.innerHTML = '<i class="bi bi-bounding-box me-2"></i>Draw Search Area';
     drawBtn.classList.remove('btn-success');
     drawBtn.classList.add('btn-warning');
-    drawBtn.disabled = true; // Will be enabled when location is set
-    
+    drawBtn.disabled = !incidentLocation; // Enable if incident location exists
+
     // Disable search area controls
     document.getElementById('clearAreaBtn').disabled = true;
     document.getElementById('generateDivisionsBtn').disabled = true;
     document.getElementById('divisionsInfo').classList.add('d-none');
-    
-    showStatus('Search area and divisions cleared', 'success');
+
+    // Incident location is preserved - it stays on the map
+    showStatus('Search area and divisions cleared. Incident location preserved.', 'success');
 }
 
 // Place incident marker without saving
@@ -555,30 +562,55 @@ async function generateDivisions() {
         showStatus('Please create a search area first', 'error');
         return;
     }
-    
+
     try {
         // Clear existing divisions
         divisionsGroup.clearLayers();
-        
+
         // Get search area coordinates
         const searchAreaCoords = searchAreaPolygon.getLatLngs()[0];
-        
+
+        // Get max divisions value and strategy
+        const maxDivisions = parseInt(document.getElementById('maxDivisions').value) || 8;
+        const strategy = document.getElementById('divisionStrategy').value;
+
         // Generate divisions using API
         const btn = document.getElementById('generateDivisionsBtn');
         btn.innerHTML = '<i class="bi bi-hourglass-split me-2"></i>Generating...';
         btn.disabled = true;
-        
-        showStatus('Generating search divisions...', 'success');
-        
-        generatedDivisions = await generateDivisionsPreview(searchAreaCoords);
+
+        const statusMessage = strategy === 'road'
+            ? 'Generating road-based divisions (fetching road data from OpenStreetMap)...'
+            : 'Generating grid-based divisions...';
+        showStatus(statusMessage, 'success');
+
+        generatedDivisions = await generateDivisionsPreview(searchAreaCoords, maxDivisions, strategy);
         
         // Display divisions on map
         generatedDivisions.forEach((division, index) => {
+            // High-contrast color palette optimized for map visibility
+            // Colors are distinct and easy to differentiate
             const colors = [
-                '#198754', // success - assigned
-                '#198754', // success - assigned  
-                '#ffc107', // warning - unassigned
-                '#17a2b8'  // info - completed
+                '#e6194b', // Red
+                '#3cb44b', // Green
+                '#ffe119', // Yellow
+                '#4363d8', // Blue
+                '#f58231', // Orange
+                '#911eb4', // Purple
+                '#42d4f4', // Cyan
+                '#f032e6', // Magenta
+                '#bfef45', // Lime
+                '#fabed4', // Pink
+                '#469990', // Teal
+                '#dcbeff', // Lavender
+                '#9a6324', // Brown
+                '#fffac8', // Beige
+                '#800000', // Maroon
+                '#aaffc3', // Mint
+                '#808000', // Olive
+                '#ffd8b1', // Apricot
+                '#000075', // Navy
+                '#a9a9a9'  // Gray
             ];
             const color = colors[index % colors.length];
             
@@ -743,11 +775,11 @@ function handleLocationButtonClick() {
 document.addEventListener('DOMContentLoaded', function() {
     initMap();
     initCommonFeatures();
-    
+
     // Form change events
     document.getElementById('incidentName').addEventListener('input', checkFormReadiness);
     document.getElementById('incidentType').addEventListener('change', checkFormReadiness);
-    
+
     // Map controls
     document.getElementById('setLocationBtn').addEventListener('click', handleLocationButtonClick);
     document.getElementById('drawAreaBtn').addEventListener('click', () => {
@@ -760,7 +792,24 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('clearAreaBtn').addEventListener('click', clearSearchArea);
     document.getElementById('generateDivisionsBtn').addEventListener('click', generateDivisions);
     document.getElementById('createIncidentBtn').addEventListener('click', createIncident);
-    
+
+    // Max divisions controls
+    document.getElementById('decreaseMaxDivisions').addEventListener('click', () => {
+        const input = document.getElementById('maxDivisions');
+        const currentValue = parseInt(input.value) || 8;
+        if (currentValue > parseInt(input.min)) {
+            input.value = currentValue - 1;
+        }
+    });
+
+    document.getElementById('increaseMaxDivisions').addEventListener('click', () => {
+        const input = document.getElementById('maxDivisions');
+        const currentValue = parseInt(input.value) || 8;
+        if (currentValue < parseInt(input.max)) {
+            input.value = currentValue + 1;
+        }
+    });
+
     // Map click handler
     map.on('click', handleMapClick);
 });
