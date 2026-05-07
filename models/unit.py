@@ -297,9 +297,10 @@ class Unit:
             cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             
             cursor.execute("""
-                SELECT u.*, sd.division_name 
+                SELECT u.*, sd.division_name
                 FROM units u
                 LEFT JOIN search_divisions sd ON u.current_division_id = sd.division_id
+                    AND sd.incident_id = u.current_incident_id
                 WHERE u.current_incident_id = %s
                 ORDER BY u.unit_name
             """, (incident_id,))
